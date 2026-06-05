@@ -210,6 +210,110 @@ export function computeReport(
   };
 }
 
+// ── Assemble report from PRE-AGGREGATED SQL rows (fast path) ───────────────
+// The SQL RPCs return tiny per-stage rows; this rebuilds the exact same
+// FunnelReport (cumulative reached via suffix sum, conversion, bottleneck,
+// key metrics) without ever loading individual leads into Node.
+
+/** One row per open stage, already aggregated in Postgres. */
+export interface StageAgg {
+  rank: number;
+  name: string;
+  /** Leads currently on this stage (kanban count). */
+  current: number;
+  /** Leads whose effective furthest rank == this rank (histogram bucket). */
+  reachedExact: number;
+  avgDays: number;
+  stuck: number;
+}
+
+export interface HeadlineAgg {
+  totalLeads: number;
+  wonCount: number;
+  lostCount: number;
+  openCount: number;
+  wonValue: number;
+  lostValue: number;
+  atRiskValue: number;
+}
+
+export function assembleReport(
+  stagesIn: StageAgg[],
+  headline: HeadlineAgg,
+  lossReasons: LossReasonStat[],
+): FunnelReport {
+  const stages = [...stagesIn].sort((a, b) => a.rank - b.rank);
+
+  // Cumulative "reached" = suffix sum of the reachedExact histogram.
+  const reachedByRank = new Map<number, number>();
+  let suffix = 0;
+  for (let i = stages.length - 1; i >= 0; i--) {
+    suffix += stages[i].reachedExact;
+    reachedByRank.set(stages[i].rank, suffix);
+  }
+
+  const funnel: StageMetric[] = stages.map((s) => ({
+    name: s.name,
+    rank: s.rank,
+    reached: reachedByRank.get(s.rank) ?? 0,
+    current: s.current,
+    conversionFromPrev: null,
+    dropFromPrev: null,
+    lostFromPrev: 0,
+    avgDaysOnStage: round1(s.avgDays),
+    stuck: s.stuck,
+  }));
+
+  for (let i = 1; i < funnel.length; i++) {
+    const prev = funnel[i - 1];
+    const cur = funnel[i];
+    if (prev.reached > 0) {
+      const conv = (cur.reached / prev.reached) * 100;
+      cur.conversionFromPrev = round1(conv);
+      cur.dropFromPrev = round1(100 - conv);
+      cur.lostFromPrev = Math.max(0, prev.reached - cur.reached);
+    }
+  }
+
+  let bottleneck: Bottleneck | null = null;
+  for (let i = 1; i < funnel.length; i++) {
+    const cur = funnel[i];
+    const prev = funnel[i - 1];
+    if (cur.dropFromPrev == null || prev.reached < 5) continue;
+    if (!bottleneck || cur.dropFromPrev > bottleneck.dropPct) {
+      bottleneck = {
+        fromStage: prev.name,
+        toStage: cur.name,
+        dropPct: cur.dropFromPrev,
+        lostCount: cur.lostFromPrev,
+        verdict:
+          `Больше всего сделок теряется на переходе «${prev.name}» → ` +
+          `«${cur.name}» (минус ${cur.dropFromPrev}%). ` +
+          `Здесь отвалилось ${cur.lostFromPrev} ${pluralLeads(cur.lostFromPrev)}.`,
+      };
+    }
+  }
+
+  const overallConversion =
+    headline.totalLeads > 0 ? round1((headline.wonCount / headline.totalLeads) * 100) : 0;
+
+  return {
+    totalLeads: headline.totalLeads,
+    wonCount: headline.wonCount,
+    lostCount: headline.lostCount,
+    openCount: headline.openCount,
+    overallConversion,
+    wonValue: headline.wonValue,
+    lostValue: headline.lostValue,
+    atRiskValue: headline.atRiskValue,
+    funnel,
+    bottleneck,
+    keyMetrics: computeKeyMetrics(funnel),
+    lossReasons,
+    generatedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
 // ── Stage matching by normalized name (dynamic, never keyed on ids) ────────
 function normalizeStageName(s: string): string {
   return s

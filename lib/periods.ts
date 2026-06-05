@@ -30,3 +30,9 @@ export function periodStart(
   if (!p || p.days == null) return undefined;
   return now - p.days * 86400;
 }
+
+/** Number of days for a period, or null for "all" — passed to the SQL RPCs. */
+export function periodDays(key: PeriodKey): number | null {
+  const p = PERIODS.find((x) => x.key === key);
+  return p?.days ?? null;
+}

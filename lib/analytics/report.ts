@@ -1,14 +1,15 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  computeReport,
-  type AnalyticsLead,
-  type AnalyticsStage,
+  assembleReport,
   type FunnelReport,
+  type HeadlineAgg,
+  type StageAgg,
+  type LossReasonStat,
 } from "./funnel";
 import {
   normalizePeriod,
-  periodStart,
+  periodDays,
   type PeriodKey,
   type PipelineRef,
 } from "@/lib/periods";
@@ -25,6 +26,16 @@ export interface ManagerStat {
   topStages: { name: string; count: number }[];
 }
 
+export interface ReportShell {
+  connected: boolean;
+  synced: boolean;
+  lastSyncedAt: string | null;
+  pipelines: PipelineRef[];
+  selectedPipelineId: number | null;
+  selectedPipelineName: string | null;
+  period: PeriodKey;
+}
+
 export interface ReportData {
   connected: boolean;
   synced: boolean;
@@ -35,145 +46,61 @@ export interface ReportData {
   period: PeriodKey;
   hasData: boolean;
   report: FunnelReport | null;
-  /** Per-manager stats across ALL pipelines in the period. */
   managers: ManagerStat[];
-  /** Total leads across all pipelines in the period. */
   totalLeadsInPeriod: number;
 }
 
-interface StageRow {
-  pipeline_external_id: number;
+const num = (x: unknown): number => Number(x ?? 0);
+
+interface PipelineAggRow {
   external_id: number;
   name: string;
-  rank: number | null;
-  is_won: boolean;
-  is_lost: boolean;
+  is_main: boolean;
+  lead_count: number | string;
 }
 
-interface LeadRow {
-  pipeline_external_id: number | null;
-  status_external_id: number | null;
-  stage: string | null;
-  is_won: boolean;
-  is_lost: boolean;
-  price: number | null;
-  reached_rank: number | null;
-  loss_reason: string | null;
-  responsible: string | null;
-  created_at_src: string | null;
-  stage_entered_at: string | null;
-}
-
-const toSec = (iso: string | null): number =>
-  iso ? Math.floor(new Date(iso).getTime() / 1000) : 0;
-
-/** Read every row of a table for an org, paging past PostgREST's 1000 cap. */
-async function fetchAll<T>(
+async function loadShellRaw(
   supabase: SupabaseClient,
-  table: string,
-  columns: string,
-  apply: (q: any) => any,
-): Promise<T[]> {
-  const out: T[] = [];
-  const size = 1000;
-  for (let from = 0; ; from += size) {
-    const { data, error } = await apply(
-      supabase.from(table).select(columns).order("id", { ascending: true }),
-    ).range(from, from + size - 1);
-    if (error) throw new Error(`${table}: ${error.message}`);
-    const rows = (data as T[]) ?? [];
-    out.push(...rows);
-    if (rows.length < size) break;
-  }
-  return out;
-}
-
-/**
- * Assemble the dashboard/funnel/managers report from synced DB rows. ALL leads
- * are read (paginated) so totals, conversion and manager stats are complete —
- * never capped at 1000. RLS-scoped via the passed client.
- */
-export async function getReportData(
-  supabase: SupabaseClient,
-  organizationId: string,
+  org: string,
   opts: { period?: string | null; pipelineId?: string | null },
-): Promise<ReportData> {
+): Promise<{ shell: ReportShell; days: number | null; pipelineRows: PipelineAggRow[] }> {
   const period = normalizePeriod(opts.period);
+  const days = periodDays(period);
 
   const { data: integration } = await supabase
     .from("integrations")
     .select("status, last_synced_at")
-    .eq("organization_id", organizationId)
+    .eq("organization_id", org)
     .eq("provider", "amocrm")
     .maybeSingle();
-
   const connected = integration?.status === "CONNECTED";
   const lastSyncedAt = (integration?.last_synced_at as string | null) ?? null;
 
-  const { data: pipelineRows } = await supabase
-    .from("amocrm_pipelines")
-    .select("external_id, name, is_main, sort")
-    .eq("organization_id", organizationId)
-    .order("sort", { ascending: true });
+  const { data } = await supabase.rpc("report_pipelines", { p_org: org, p_days: days });
+  const pipelineRows = (data as PipelineAggRow[]) ?? [];
 
-  const base: ReportData = {
-    connected,
-    synced: false,
-    lastSyncedAt,
-    pipelines: [],
-    selectedPipelineId: null,
-    selectedPipelineName: null,
-    period,
-    hasData: false,
-    report: null,
-    managers: [],
-    totalLeadsInPeriod: 0,
-  };
-
-  if (!pipelineRows || pipelineRows.length === 0) return base;
-  base.synced = true;
-
-  const [stages, leads, users] = await Promise.all([
-    fetchAll<StageRow>(
-      supabase,
-      "amocrm_stages",
-      "pipeline_external_id, external_id, name, rank, is_won, is_lost",
-      (q) => q.eq("organization_id", organizationId),
-    ),
-    fetchAll<LeadRow>(
-      supabase,
-      "leads",
-      "pipeline_external_id, status_external_id, stage, is_won, is_lost, price, reached_rank, loss_reason, responsible, created_at_src, stage_entered_at",
-      (q) => q.eq("organization_id", organizationId).eq("source", "amocrm"),
-    ),
-    fetchAll<{ external_id: number; name: string }>(
-      supabase,
-      "amocrm_users",
-      "external_id, name",
-      (q) => q.eq("organization_id", organizationId),
-    ),
-  ]);
-
-  const from = periodStart(period);
-  const inPeriod = (l: LeadRow) => from == null || toSec(l.created_at_src) >= from;
-  const periodLeads = leads.filter(inPeriod);
-  base.totalLeadsInPeriod = periodLeads.length;
-
-  // ── pipelines + selection (counts from the full set) ─────────────────────
-  const countByPipeline = new Map<number, number>();
-  for (const l of periodLeads) {
-    if (l.pipeline_external_id == null) continue;
-    countByPipeline.set(
-      l.pipeline_external_id,
-      (countByPipeline.get(l.pipeline_external_id) ?? 0) + 1,
-    );
+  if (pipelineRows.length === 0) {
+    return {
+      shell: {
+        connected,
+        synced: false,
+        lastSyncedAt,
+        pipelines: [],
+        selectedPipelineId: null,
+        selectedPipelineName: null,
+        period,
+      },
+      days,
+      pipelineRows,
+    };
   }
-  const pipelines: PipelineRef[] = pipelineRows.map((p: any) => ({
-    id: p.external_id as number,
-    name: p.name as string,
-    leadCount: countByPipeline.get(p.external_id) ?? 0,
+
+  const pipelines: PipelineRef[] = pipelineRows.map((p) => ({
+    id: p.external_id,
+    name: p.name,
+    leadCount: num(p.lead_count),
   }));
-  const mainId = (pipelineRows.find((p: any) => p.is_main) as any)?.external_id;
+  const mainId = pipelineRows.find((p) => p.is_main)?.external_id;
   const requested = opts.pipelineId ? Number(opts.pipelineId) : NaN;
   const selected =
     pipelines.find((p) => p.id === requested) ??
@@ -181,120 +108,137 @@ export async function getReportData(
     [...pipelines].sort((a, b) => b.leadCount - a.leadCount)[0] ??
     pipelines[0];
 
-  base.pipelines = pipelines;
-  base.selectedPipelineId = selected.id;
-  base.selectedPipelineName = selected.name;
+  return {
+    shell: {
+      connected,
+      synced: true,
+      lastSyncedAt,
+      pipelines,
+      selectedPipelineId: selected.id,
+      selectedPipelineName: selected.name,
+      period,
+    },
+    days,
+    pipelineRows,
+  };
+}
 
-  // ── funnel for the selected pipeline ─────────────────────────────────────
-  const openStages: AnalyticsStage[] = stages
-    .filter((s) => s.pipeline_external_id === selected.id && s.rank != null)
-    .map((s) => ({ name: s.name, rank: s.rank as number }))
-    .sort((a, b) => a.rank - b.rank);
+/**
+ * Lightweight shell — just enough to render the page header, the period/pipeline
+ * filter bar and resolve the selected pipeline. The heavy aggregates stream in
+ * separately via getReportData (kept behind a Suspense boundary).
+ */
+export async function getReportShell(
+  supabase: SupabaseClient,
+  org: string,
+  opts: { period?: string | null; pipelineId?: string | null },
+): Promise<ReportShell> {
+  return (await loadShellRaw(supabase, org, opts)).shell;
+}
 
-  const rankByStatus = new Map<number, number>();
-  for (const s of stages) {
-    if (s.pipeline_external_id === selected.id && s.rank != null) {
-      rankByStatus.set(s.external_id, s.rank);
-    }
-  }
+/**
+ * Full dashboard/funnel/managers data. All aggregation runs in Postgres via the
+ * report_* RPCs (SECURITY DEFINER + membership guard), so Node only handles a
+ * handful of small rows — no 16k-lead read. Numbers are identical to the old
+ * in-Node computation.
+ */
+export async function getReportData(
+  supabase: SupabaseClient,
+  org: string,
+  opts: { period?: string | null; pipelineId?: string | null },
+): Promise<ReportData> {
+  const { shell, days, pipelineRows } = await loadShellRaw(supabase, org, opts);
 
-  const scopedLeads = periodLeads.filter((l) => l.pipeline_external_id === selected.id);
-  const analyticsLeads: AnalyticsLead[] = scopedLeads.map((l) => ({
-    reachedRank: l.reached_rank,
-    statusRank:
-      l.status_external_id != null ? rankByStatus.get(l.status_external_id) ?? null : null,
-    stageName: l.stage,
-    isWon: l.is_won,
-    isLost: l.is_lost,
-    price: l.price ?? 0,
-    createdAtSec: toSec(l.created_at_src),
-    stageEnteredAtSec: l.stage_entered_at ? toSec(l.stage_entered_at) : null,
-    lossReason: l.loss_reason,
+  const base: ReportData = {
+    ...shell,
+    hasData: false,
+    report: null,
+    managers: [],
+    totalLeadsInPeriod: 0,
+  };
+  if (!shell.synced || shell.selectedPipelineId == null) return base;
+
+  const pid = shell.selectedPipelineId;
+  const [funnelRes, headRes, lossRes, mgrRes, mgrStageRes] = await Promise.all([
+    supabase.rpc("report_funnel", { p_org: org, p_pipeline: pid, p_days: days }),
+    supabase.rpc("report_headline", { p_org: org, p_pipeline: pid, p_days: days }),
+    supabase.rpc("report_loss_reasons", { p_org: org, p_pipeline: pid, p_days: days }),
+    supabase.rpc("report_managers", { p_org: org, p_days: days }),
+    supabase.rpc("report_manager_stages", { p_org: org, p_days: days }),
+  ]);
+
+  const stageAggs: StageAgg[] = ((funnelRes.data as any[]) ?? []).map((r) => ({
+    rank: num(r.rank),
+    name: r.name,
+    current: num(r.current_count),
+    reachedExact: num(r.reached_exact),
+    avgDays: num(r.avg_days),
+    stuck: num(r.stuck),
   }));
 
-  base.hasData = analyticsLeads.length > 0;
-  const report = computeReport(openStages, analyticsLeads);
-  base.report = report;
+  const h = ((headRes.data as any[]) ?? [])[0] ?? {};
+  const headline: HeadlineAgg = {
+    totalLeads: num(h.total_leads),
+    wonCount: num(h.won_count),
+    lostCount: num(h.lost_count),
+    openCount: num(h.open_count),
+    wonValue: num(h.won_value),
+    lostValue: num(h.lost_value),
+    atRiskValue: num(h.at_risk_value),
+  };
 
-  // ── diagnostics: current (kanban) distribution + reconciliation ──────────
-  // "Сейчас на этапе" should match the amoCRM kanban; current(open) + won(142)
-  // + lost(143) should ≈ total leads in the period for this pipeline.
-  const currentSum = report.funnel.reduce((a, s) => a + s.current, 0);
-  const reconciled = currentSum + report.wonCount + report.lostCount;
-  const distLine = report.funnel.map((s) => `${s.name}=${s.current}`).join(", ");
-  console.log(
-    `[report] воронка "${selected.name}" период=${period}: всего=${report.totalLeads}, ` +
-      `сейчас-в-открытых=${currentSum}, Успешно(142)=${report.wonCount}, ` +
-      `Закрыто(143)=${report.lostCount}, сумма(сейчас+142+143)=${reconciled}`,
-  );
-  console.log(
-    `[report] текущее распределение (сверка с amoCRM): ${distLine}, ` +
-      `Успешно(142)=${report.wonCount}, Закрыто(143)=${report.lostCount}`,
+  const lossReasons: LossReasonStat[] = ((lossRes.data as any[]) ?? []).map((r) => ({
+    reason: r.reason,
+    count: num(r.cnt),
+    value: num(r.value),
+  }));
+
+  base.report = assembleReport(stageAggs, headline, lossReasons);
+  base.hasData = headline.totalLeads > 0;
+  base.totalLeadsInPeriod = pipelineRows.reduce((a, p) => a + num(p.lead_count), 0);
+  base.managers = buildManagers(
+    (mgrRes.data as any[]) ?? [],
+    (mgrStageRes.data as any[]) ?? [],
   );
 
-  // ── managers across ALL pipelines in the period ──────────────────────────
-  base.managers = aggregateManagers(periodLeads, users);
+  // Compact reconciliation log (tiny — no per-lead read).
+  const distLine = base.report.funnel.map((s) => `${s.name}=${s.current}`).join(", ");
+  console.log(
+    `[report] воронка "${shell.selectedPipelineName}" период=${shell.period}: ` +
+      `всего=${headline.totalLeads}, Успешно(142)=${headline.wonCount}, ` +
+      `Закрыто(143)=${headline.lostCount} | текущее распределение: ${distLine}`,
+  );
 
   return base;
 }
 
-interface ManagerAcc {
-  id: string;
-  name: string;
-  leads: number;
-  won: number;
-  lost: number;
-  open: number;
-  wonValue: number;
-  byStage: Map<string, number>;
-}
-
-function aggregateManagers(
-  leads: LeadRow[],
-  users: { external_id: number; name: string }[],
-): ManagerStat[] {
-  const nameById = new Map<string, string>(
-    users.map((u) => [String(u.external_id), u.name]),
-  );
-
-  const acc = new Map<string, ManagerAcc>();
-  for (const l of leads) {
-    const id = l.responsible ?? "—";
-    const name = l.responsible
-      ? nameById.get(l.responsible) ?? `ID ${l.responsible}`
-      : "Без ответственного";
-    let m = acc.get(id);
-    if (!m) {
-      m = { id, name, leads: 0, won: 0, lost: 0, open: 0, wonValue: 0, byStage: new Map() };
-      acc.set(id, m);
-    }
-    m.leads += 1;
-    if (l.is_won) {
-      m.won += 1;
-      m.wonValue += l.price ?? 0;
-    } else if (l.is_lost) {
-      m.lost += 1;
-    } else {
-      m.open += 1;
-    }
-    const stage = l.stage ?? "—";
-    m.byStage.set(stage, (m.byStage.get(stage) ?? 0) + 1);
+function buildManagers(mgrRows: any[], stageRows: any[]): ManagerStat[] {
+  // Group the (responsible → stage → count) distribution for topStages.
+  const stagesByResp = new Map<string, { name: string; count: number }[]>();
+  for (const r of stageRows) {
+    const arr = stagesByResp.get(r.responsible) ?? [];
+    arr.push({ name: r.stage, count: num(r.cnt) });
+    stagesByResp.set(r.responsible, arr);
   }
 
-  return [...acc.values()]
-    .map((m) => ({
-      id: m.id,
-      name: m.name,
-      leads: m.leads,
-      won: m.won,
-      lost: m.lost,
-      open: m.open,
-      conversion: m.leads > 0 ? Math.round((m.won / m.leads) * 1000) / 10 : 0,
-      wonValue: m.wonValue,
-      topStages: [...m.byStage.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4)
-        .map(([name, count]) => ({ name, count })),
-    }))
+  return mgrRows
+    .map((r) => {
+      const leads = num(r.leads);
+      const won = num(r.won);
+      const tops = (stagesByResp.get(r.responsible) ?? [])
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 4);
+      return {
+        id: r.responsible,
+        name: r.name,
+        leads,
+        won,
+        lost: num(r.lost),
+        open: num(r.open_count),
+        conversion: leads > 0 ? Math.round((won / leads) * 1000) / 10 : 0,
+        wonValue: num(r.won_value),
+        topStages: tops,
+      };
+    })
     .sort((a, b) => b.leads - a.leads);
 }

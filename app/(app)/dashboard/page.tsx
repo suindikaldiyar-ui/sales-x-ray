@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import {
   Filter,
@@ -9,13 +10,14 @@ import {
 } from "lucide-react";
 import { requireTenant, canManageIntegrations } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
-import { getReportData } from "@/lib/analytics/report";
+import { getReportShell, getReportData } from "@/lib/analytics/report";
 import { fmtMoney } from "@/lib/analytics/funnel";
 import { formatNumber, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/app/page-header";
 import { StatCard } from "@/components/app/stat-card";
 import { FilterBar } from "@/components/app/filter-bar";
 import { SyncButton } from "@/components/integrations/sync-button";
+import { ReportSkeleton } from "@/components/app/report-skeleton";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -41,13 +43,12 @@ export default async function DashboardPage({
   const tenant = await requireTenant();
   const canManage = canManageIntegrations(tenant.role);
   const supabase = createClient();
-  const data = await getReportData(supabase, tenant.organization.id, {
+  const shell = await getReportShell(supabase, tenant.organization.id, {
     period: searchParams.period,
     pipelineId: searchParams.pipeline,
   });
 
-  // ── State 1: amoCRM not connected ─────────────────────────────
-  if (!data.connected) {
+  if (!shell.connected) {
     return (
       <>
         <PageHeader
@@ -57,16 +58,14 @@ export default async function DashboardPage({
         <EmptyState
           icon={<Filter className="h-5 w-5" />}
           title="Подключите amoCRM"
-          description="Дашборд оживёт, как только вы сохраните токен amoCRM и запустите синхронизацию. Все данные будут принадлежать только вашей компании."
+          description="Дашборд оживёт, как только вы сохраните токен amoCRM и запустите синхронизацию."
           action={
             canManage ? (
               <Link href="/integrations">
                 <Button>Перейти к интеграциям</Button>
               </Link>
             ) : (
-              <p className="text-sm text-content-faint">
-                Попросите владельца или РОПа подключить amoCRM.
-              </p>
+              <p className="text-sm text-content-faint">Попросите владельца или РОПа подключить amoCRM.</p>
             )
           }
         />
@@ -74,8 +73,7 @@ export default async function DashboardPage({
     );
   }
 
-  // ── State 2: connected but never synced ───────────────────────
-  if (!data.synced) {
+  if (!shell.synced) {
     return (
       <>
         <PageHeader
@@ -92,20 +90,16 @@ export default async function DashboardPage({
     );
   }
 
-  const r = data.report!;
-  const hasData = data.hasData;
-  const firstReached = r.funnel[0]?.reached ?? 0;
-
   return (
     <>
       <PageHeader
         title="Дашборд"
-        description={`«${tenant.organization.name}» · воронка «${data.selectedPipelineName}»`}
+        description={`«${tenant.organization.name}» · воронка «${shell.selectedPipelineName}»`}
         action={
           <div className="flex flex-col items-end gap-1.5">
             <span className="flex items-center gap-1.5 text-xs text-content-faint">
               <CheckCircle2 className="h-3.5 w-3.5 text-signal-good" />
-              {syncedAgo(data.lastSyncedAt)}
+              {syncedAgo(shell.lastSyncedAt)}
             </span>
             {canManage && <SyncButton size="sm" variant="outline" />}
           </div>
@@ -114,12 +108,46 @@ export default async function DashboardPage({
 
       <div className="mb-6">
         <FilterBar
-          period={data.period}
-          pipelines={data.pipelines}
-          selectedPipelineId={data.selectedPipelineId}
+          period={shell.period}
+          pipelines={shell.pipelines}
+          selectedPipelineId={shell.selectedPipelineId}
         />
       </div>
 
+      <Suspense
+        key={`${shell.period}-${shell.selectedPipelineId}`}
+        fallback={<ReportSkeleton />}
+      >
+        <DashboardData
+          orgId={tenant.organization.id}
+          period={shell.period}
+          pipelineId={shell.selectedPipelineId}
+        />
+      </Suspense>
+    </>
+  );
+}
+
+async function DashboardData({
+  orgId,
+  period,
+  pipelineId,
+}: {
+  orgId: string;
+  period: string;
+  pipelineId: number | null;
+}) {
+  const supabase = createClient();
+  const data = await getReportData(supabase, orgId, {
+    period,
+    pipelineId: pipelineId != null ? String(pipelineId) : undefined,
+  });
+  const r = data.report!;
+  const hasData = data.hasData;
+  const firstReached = r.funnel[0]?.reached ?? 0;
+
+  return (
+    <>
       {!hasData && (
         <div className="mb-6 rounded-2xl border border-line bg-ink-700/40 p-4 text-sm text-content-muted">
           За выбранный период в этой воронке нет сделок. Попробуйте увеличить
@@ -127,15 +155,9 @@ export default async function DashboardPage({
         </div>
       )}
 
-      {/* key metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Лидов за период" value={formatNumber(r.totalLeads)} placeholder={!hasData} />
-        <StatCard
-          label="Конверсия в продажу"
-          value={`${r.overallConversion}%`}
-          accent="xray"
-          placeholder={!hasData}
-        />
+        <StatCard label="Конверсия в продажу" value={`${r.overallConversion}%`} accent="xray" placeholder={!hasData} />
         <StatCard
           label="Выиграно сделок"
           value={formatNumber(r.wonCount)}
@@ -152,7 +174,6 @@ export default async function DashboardPage({
         />
       </div>
 
-      {/* dealership key metrics */}
       {hasData && r.keyMetrics.some((m) => m.available) && (
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
           {r.keyMetrics
@@ -175,9 +196,7 @@ export default async function DashboardPage({
                   )}
                 >
                   {formatNumber(m.toCount)}
-                  <span className="text-base font-medium text-content-faint">
-                    {" "}/ {formatNumber(m.fromCount)}
-                  </span>
+                  <span className="text-base font-medium text-content-faint"> / {formatNumber(m.fromCount)}</span>
                 </p>
                 <p className="mt-2 text-sm text-content-muted">{m.verdict}</p>
               </Card>
@@ -186,7 +205,6 @@ export default async function DashboardPage({
       )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        {/* funnel snapshot */}
         <Card className="lg:col-span-2">
           <CardHeader
             title="Воронка продаж"
@@ -198,9 +216,7 @@ export default async function DashboardPage({
             }
           />
           {r.funnel.length === 0 ? (
-            <p className="py-8 text-center text-sm text-content-muted">
-              В этой воронке нет открытых этапов.
-            </p>
+            <p className="py-8 text-center text-sm text-content-muted">В этой воронке нет открытых этапов.</p>
           ) : (
             <div className="space-y-3">
               {r.funnel.map((s) => {
@@ -236,7 +252,6 @@ export default async function DashboardPage({
           )}
         </Card>
 
-        {/* diagnosis */}
         <Card>
           <CardHeader title="Диагноз" subtitle="Где теряются деньги" />
           {hasData && r.bottleneck ? (
@@ -248,27 +263,21 @@ export default async function DashboardPage({
               <div className="flex items-start gap-3 rounded-xl border border-line bg-ink-700/50 p-3.5">
                 <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-signal-warn" />
                 <p className="text-sm text-content-muted">
-                  Узкое место: переход «{r.bottleneck.fromStage}» → «{r.bottleneck.toStage}».
-                  Сфокусируйте команду здесь.
+                  Узкое место: переход «{r.bottleneck.fromStage}» → «{r.bottleneck.toStage}». Сфокусируйте команду здесь.
                 </p>
               </div>
             </div>
           ) : hasData ? (
             <div className="flex flex-col items-center gap-3 py-8 text-center">
               <Lightbulb className="h-6 w-6 text-signal-good" />
-              <p className="text-sm text-content-muted">
-                Явного узкого места не найдено — воронка работает ровно.
-              </p>
+              <p className="text-sm text-content-muted">Явного узкого места не найдено — воронка работает ровно.</p>
             </div>
           ) : (
-            <p className="py-8 text-center text-sm text-content-muted">
-              Нет данных для диагноза за выбранный период.
-            </p>
+            <p className="py-8 text-center text-sm text-content-muted">Нет данных для диагноза за выбранный период.</p>
           )}
         </Card>
       </div>
 
-      {/* top managers */}
       {data.managers.length > 0 && (
         <div className="mt-6">
           <Card>
@@ -285,9 +294,7 @@ export default async function DashboardPage({
               {data.managers.slice(0, 5).map((m, i) => (
                 <div
                   key={m.id}
-                  className={`flex items-center justify-between gap-4 px-4 py-3 ${
-                    i > 0 ? "border-t border-line" : ""
-                  }`}
+                  className={`flex items-center justify-between gap-4 px-4 py-3 ${i > 0 ? "border-t border-line" : ""}`}
                 >
                   <span className="truncate font-medium text-content">{m.name}</span>
                   <div className="flex items-center gap-5 text-sm">
