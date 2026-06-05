@@ -10,6 +10,19 @@ export interface WazzupConfig {
 //   https://wazzup24.com/help/api-en/  ·  Authorization: Bearer <api_key>
 const BASE_URL = "https://api.wazzup24.com/v3";
 
+/** HTTP error carrying the status + endpoint, so callers can react per-endpoint
+ * (e.g. tolerate a 403 on /users while keeping /channels). */
+export class WazzupHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "WazzupHttpError";
+  }
+}
+
 // Conservative pacer + retries (Wazzup doesn't publish an exact rate limit).
 const MIN_REQUEST_INTERVAL_MS = 220; // ≈4.5 req/s
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -54,10 +67,12 @@ export class WazzupApiClient {
   constructor(private readonly apiKey: string) {}
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const method = init?.method ?? "GET";
+    const url = `${BASE_URL}${path}`;
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       await gate();
-      const res = await fetch(`${BASE_URL}${path}`, {
+      const res = await fetch(url, {
         ...init,
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -78,13 +93,20 @@ export class WazzupApiClient {
         lastErr = new Error("Wazzup 429 (rate limited)");
         continue;
       }
-      if (res.status === 401 || res.status === 403) {
-        throw new Error("Wazzup 401/403: неверный или просроченный API-ключ.");
-      }
+      // Always read the body once, so errors carry Wazzup's exact message.
       if (res.status === 204) return {} as T;
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`Wazzup ${res.status} on ${path}: ${body.slice(0, 300)}`);
+        console.error(`[sync wazzup] ${method} ${url} -> ${res.status} ${body.slice(0, 300)}`);
+        const detail = body.slice(0, 200).trim();
+        if (res.status === 401 || res.status === 403) {
+          throw new WazzupHttpError(
+            res.status,
+            path,
+            `Wazzup ${res.status} на ${path}` + (detail ? `: ${detail}` : " (доступ запрещён для ключа)"),
+          );
+        }
+        throw new WazzupHttpError(res.status, path, `Wazzup ${res.status} на ${path}: ${detail}`);
       }
       return (await res.json()) as T;
     }
