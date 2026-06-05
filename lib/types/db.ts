@@ -64,6 +64,7 @@ export interface Integration {
   status: IntegrationStatus;
   config: Record<string, unknown>;
   last_synced_at: string | null;
+  last_auto_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }

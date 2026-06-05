@@ -133,6 +133,7 @@ export interface StageHit {
 export interface GetLeadsParams {
   pipelineId: number;
   dateFrom?: number; // unix seconds, lower bound on created_at
+  updatedFrom?: number; // unix seconds, lower bound on updated_at (incremental)
 }
 
 /**
@@ -255,6 +256,7 @@ export class AmoApiClient {
     qs.set("with", "loss_reason");
     qs.set("filter[pipeline_id]", String(params.pipelineId));
     if (params.dateFrom) qs.set("filter[created_at][from]", String(params.dateFrom));
+    if (params.updatedFrom) qs.set("filter[updated_at][from]", String(params.updatedFrom));
     return `/api/v4/leads?${qs.toString()}`;
   }
 

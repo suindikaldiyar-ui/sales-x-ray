@@ -81,13 +81,15 @@ function ConvRow({ c, interest }: { c: ConvFeedItem; interest?: Interest }) {
 export default async function ConversationsPage({
   searchParams,
 }: {
-  searchParams: { period?: string };
+  searchParams: { period?: string; from?: string; to?: string };
 }) {
   const tenant = await requireTenant();
   const canManage = canManageIntegrations(tenant.role);
   const supabase = createClient();
   const data = await getConversationsData(supabase, tenant.organization.id, {
     period: searchParams.period,
+    from: searchParams.from,
+    to: searchParams.to,
   });
   const ai = await getAiStatus(supabase, tenant.organization.id);
   const analyses = await getCachedAnalyses(
@@ -144,7 +146,7 @@ export default async function ConversationsPage({
       />
 
       <div className="mb-6">
-        <FilterBar period={data.period} pipelines={[]} selectedPipelineId={null} />
+        <FilterBar pipelines={[]} selectedPipelineId={null} />
       </div>
 
       {/* Honest state: history requires webhooks (next step). */}

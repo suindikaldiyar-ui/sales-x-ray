@@ -7,12 +7,8 @@ import {
   type StageAgg,
   type LossReasonStat,
 } from "./funnel";
-import {
-  normalizePeriod,
-  periodDays,
-  type PeriodKey,
-  type PipelineRef,
-} from "@/lib/periods";
+import { type PipelineRef } from "@/lib/periods";
+import { resolveRange } from "@/lib/period-range";
 
 export interface ManagerStat {
   id: string;
@@ -33,7 +29,8 @@ export interface ReportShell {
   pipelines: PipelineRef[];
   selectedPipelineId: number | null;
   selectedPipelineName: string | null;
-  period: PeriodKey;
+  period: string;
+  periodLabel: string;
 }
 
 export interface ReportData {
@@ -43,11 +40,19 @@ export interface ReportData {
   pipelines: PipelineRef[];
   selectedPipelineId: number | null;
   selectedPipelineName: string | null;
-  period: PeriodKey;
+  period: string;
+  periodLabel: string;
   hasData: boolean;
   report: FunnelReport | null;
   managers: ManagerStat[];
   totalLeadsInPeriod: number;
+}
+
+export interface RangeOpts {
+  period?: string | null;
+  from?: string | null;
+  to?: string | null;
+  pipelineId?: string | null;
 }
 
 const num = (x: unknown): number => Number(x ?? 0);
@@ -62,10 +67,16 @@ interface PipelineAggRow {
 async function loadShellRaw(
   supabase: SupabaseClient,
   org: string,
-  opts: { period?: string | null; pipelineId?: string | null },
-): Promise<{ shell: ReportShell; days: number | null; pipelineRows: PipelineAggRow[] }> {
-  const period = normalizePeriod(opts.period);
-  const days = periodDays(period);
+  opts: RangeOpts,
+): Promise<{
+  shell: ReportShell;
+  pFrom: string | null;
+  pTo: string | null;
+  pipelineRows: PipelineAggRow[];
+}> {
+  const range = resolveRange({ period: opts.period, from: opts.from, to: opts.to });
+  const pFrom = range.from ? range.from.toISOString() : null;
+  const pTo = range.to ? range.to.toISOString() : null;
 
   const { data: integration } = await supabase
     .from("integrations")
@@ -76,7 +87,11 @@ async function loadShellRaw(
   const connected = integration?.status === "CONNECTED";
   const lastSyncedAt = (integration?.last_synced_at as string | null) ?? null;
 
-  const { data } = await supabase.rpc("report_pipelines", { p_org: org, p_days: days });
+  const { data } = await supabase.rpc("report_pipelines", {
+    p_org: org,
+    p_from: pFrom,
+    p_to: pTo,
+  });
   const pipelineRows = (data as PipelineAggRow[]) ?? [];
 
   if (pipelineRows.length === 0) {
@@ -88,9 +103,11 @@ async function loadShellRaw(
         pipelines: [],
         selectedPipelineId: null,
         selectedPipelineName: null,
-        period,
+        period: range.key,
+        periodLabel: range.label,
       },
-      days,
+      pFrom,
+      pTo,
       pipelineRows,
     };
   }
@@ -116,9 +133,11 @@ async function loadShellRaw(
       pipelines,
       selectedPipelineId: selected.id,
       selectedPipelineName: selected.name,
-      period,
+      period: range.key,
+      periodLabel: range.label,
     },
-    days,
+    pFrom,
+    pTo,
     pipelineRows,
   };
 }
@@ -131,7 +150,7 @@ async function loadShellRaw(
 export async function getReportShell(
   supabase: SupabaseClient,
   org: string,
-  opts: { period?: string | null; pipelineId?: string | null },
+  opts: RangeOpts,
 ): Promise<ReportShell> {
   return (await loadShellRaw(supabase, org, opts)).shell;
 }
@@ -145,9 +164,9 @@ export async function getReportShell(
 export async function getReportData(
   supabase: SupabaseClient,
   org: string,
-  opts: { period?: string | null; pipelineId?: string | null },
+  opts: RangeOpts,
 ): Promise<ReportData> {
-  const { shell, days, pipelineRows } = await loadShellRaw(supabase, org, opts);
+  const { shell, pFrom, pTo, pipelineRows } = await loadShellRaw(supabase, org, opts);
 
   const base: ReportData = {
     ...shell,
@@ -160,11 +179,11 @@ export async function getReportData(
 
   const pid = shell.selectedPipelineId;
   const [funnelRes, headRes, lossRes, mgrRes, mgrStageRes] = await Promise.all([
-    supabase.rpc("report_funnel", { p_org: org, p_pipeline: pid, p_days: days }),
-    supabase.rpc("report_headline", { p_org: org, p_pipeline: pid, p_days: days }),
-    supabase.rpc("report_loss_reasons", { p_org: org, p_pipeline: pid, p_days: days }),
-    supabase.rpc("report_managers", { p_org: org, p_days: days }),
-    supabase.rpc("report_manager_stages", { p_org: org, p_days: days }),
+    supabase.rpc("report_funnel", { p_org: org, p_pipeline: pid, p_from: pFrom, p_to: pTo }),
+    supabase.rpc("report_headline", { p_org: org, p_pipeline: pid, p_from: pFrom, p_to: pTo }),
+    supabase.rpc("report_loss_reasons", { p_org: org, p_pipeline: pid, p_from: pFrom, p_to: pTo }),
+    supabase.rpc("report_managers", { p_org: org, p_from: pFrom, p_to: pTo }),
+    supabase.rpc("report_manager_stages", { p_org: org, p_from: pFrom, p_to: pTo }),
   ]);
 
   const stageAggs: StageAgg[] = ((funnelRes.data as any[]) ?? []).map((r) => ({

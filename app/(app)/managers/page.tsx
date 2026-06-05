@@ -21,13 +21,15 @@ export const metadata = { title: "Менеджеры — Sales X-Ray" };
 export default async function ManagersPage({
   searchParams,
 }: {
-  searchParams: { period?: string };
+  searchParams: { period?: string; from?: string; to?: string };
 }) {
   const tenant = await requireTenant();
   const canManage = canManageIntegrations(tenant.role);
   const supabase = createClient();
   const shell = await getReportShell(supabase, tenant.organization.id, {
     period: searchParams.period,
+    from: searchParams.from,
+    to: searchParams.to,
   });
 
   if (!shell.connected) {
@@ -61,18 +63,36 @@ export default async function ManagersPage({
     <>
       <PageHeader title="Менеджеры" description="Эффективность по сделкам amoCRM за период." />
       <div className="mb-6">
-        <FilterBar period={shell.period} pipelines={[]} selectedPipelineId={null} />
+        <FilterBar pipelines={[]} selectedPipelineId={null} />
       </div>
-      <Suspense key={shell.period} fallback={<ManagersSkeleton />}>
-        <ManagersData orgId={tenant.organization.id} period={shell.period} />
+      <Suspense
+        key={`${searchParams.period}-${searchParams.from}-${searchParams.to}`}
+        fallback={<ManagersSkeleton />}
+      >
+        <ManagersData
+          orgId={tenant.organization.id}
+          period={searchParams.period}
+          from={searchParams.from}
+          to={searchParams.to}
+        />
       </Suspense>
     </>
   );
 }
 
-async function ManagersData({ orgId, period }: { orgId: string; period: string }) {
+async function ManagersData({
+  orgId,
+  period,
+  from,
+  to,
+}: {
+  orgId: string;
+  period?: string;
+  from?: string;
+  to?: string;
+}) {
   const supabase = createClient();
-  const data = await getReportData(supabase, orgId, { period });
+  const data = await getReportData(supabase, orgId, { period, from, to });
   const managers = data.managers;
 
   if (managers.length === 0) {

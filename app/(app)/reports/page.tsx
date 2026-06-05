@@ -9,12 +9,16 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { AiReportGenerator } from "@/components/ai/ai-report-generator";
 import { MarkdownLite } from "@/components/ai/markdown-lite";
-import { PERIODS } from "@/lib/periods";
+import { PERIOD_PRESETS } from "@/lib/period-range";
 
 export const metadata = { title: "Отчёты — Sales X-Ray" };
 
 function periodLabel(period: string) {
-  return PERIODS.find((p) => p.key === period)?.label ?? period;
+  if (period?.startsWith("custom_")) {
+    const [, f, t] = period.split("_");
+    return f && t ? `${f} — ${t}` : "Произвольный период";
+  }
+  return PERIOD_PRESETS.find((p) => p.key === period)?.label ?? period;
 }
 
 export default async function ReportsPage() {

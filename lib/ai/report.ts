@@ -5,7 +5,7 @@ import { requireGeminiKey } from "./settings";
 import { getReportData } from "@/lib/analytics/report";
 import { getConversationsData } from "@/lib/analytics/conversations";
 import { fmtMoney } from "@/lib/analytics/funnel";
-import { normalizePeriod, PERIODS } from "@/lib/periods";
+import { resolveRange, rangeToken, type RangeParams } from "@/lib/period-range";
 
 export interface AiReport {
   period: string;
@@ -18,10 +18,6 @@ export interface AiReport {
 }
 
 const SYSTEM = `Ты — коммерческий директор. По сухим цифрам отдела продаж ты пишешь короткий, честный и конкретный разбор для собственника бизнеса. Пиши на русском, по-деловому, опирайся на цифры. Без воды и общих фраз.`;
-
-function periodLabel(period: string): string {
-  return PERIODS.find((p) => p.key === period)?.label ?? period;
-}
 
 function buildBrief(
   report: Awaited<ReturnType<typeof getReportData>>,
@@ -101,11 +97,12 @@ ${brief}
 export async function generateAiReport(
   supabase: SupabaseClient,
   org: string,
-  periodRaw: string | null | undefined,
+  rangeParams: RangeParams,
   opts: { force?: boolean } = {},
 ): Promise<AiReport> {
-  const period = normalizePeriod(periodRaw);
-  const label = periodLabel(period);
+  const range = resolveRange(rangeParams);
+  const period = rangeToken(range); // unique per preset/custom window
+  const label = range.label;
   const reportDate = new Date().toISOString().slice(0, 10);
 
   if (!opts.force) {
@@ -131,8 +128,8 @@ export async function generateAiReport(
   }
 
   const [report, conv] = await Promise.all([
-    getReportData(supabase, org, { period }),
-    getConversationsData(supabase, org, { period }),
+    getReportData(supabase, org, rangeParams),
+    getConversationsData(supabase, org, rangeParams),
   ]);
 
   const brief = buildBrief(report, conv, label);

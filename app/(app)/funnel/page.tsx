@@ -20,13 +20,15 @@ export const metadata = { title: "Воронка — Sales X-Ray" };
 export default async function FunnelPage({
   searchParams,
 }: {
-  searchParams: { period?: string; pipeline?: string };
+  searchParams: { period?: string; from?: string; to?: string; pipeline?: string };
 }) {
   const tenant = await requireTenant();
   const canManage = canManageIntegrations(tenant.role);
   const supabase = createClient();
   const shell = await getReportShell(supabase, tenant.organization.id, {
     period: searchParams.period,
+    from: searchParams.from,
+    to: searchParams.to,
     pipelineId: searchParams.pipeline,
   });
 
@@ -64,17 +66,18 @@ export default async function FunnelPage({
         description={`«${shell.selectedPipelineName}» · конверсия по позиционному рангу этапа`}
       />
       <div className="mb-6">
-        <FilterBar
-          period={shell.period}
-          pipelines={shell.pipelines}
-          selectedPipelineId={shell.selectedPipelineId}
-        />
+        <FilterBar pipelines={shell.pipelines} selectedPipelineId={shell.selectedPipelineId} />
       </div>
 
-      <Suspense key={`${shell.period}-${shell.selectedPipelineId}`} fallback={<ReportSkeleton rows={6} />}>
+      <Suspense
+        key={`${searchParams.period}-${searchParams.from}-${searchParams.to}-${shell.selectedPipelineId}`}
+        fallback={<ReportSkeleton rows={6} />}
+      >
         <FunnelData
           orgId={tenant.organization.id}
-          period={shell.period}
+          period={searchParams.period}
+          from={searchParams.from}
+          to={searchParams.to}
           pipelineId={shell.selectedPipelineId}
         />
       </Suspense>
@@ -85,15 +88,21 @@ export default async function FunnelPage({
 async function FunnelData({
   orgId,
   period,
+  from,
+  to,
   pipelineId,
 }: {
   orgId: string;
-  period: string;
+  period?: string;
+  from?: string;
+  to?: string;
   pipelineId: number | null;
 }) {
   const supabase = createClient();
   const data = await getReportData(supabase, orgId, {
     period,
+    from,
+    to,
     pipelineId: pipelineId != null ? String(pipelineId) : undefined,
   });
   const r = data.report!;

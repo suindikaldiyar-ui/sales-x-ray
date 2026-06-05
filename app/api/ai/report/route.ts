@@ -21,9 +21,12 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   try {
     const supabase = createClient();
-    const report = await generateAiReport(supabase, tenant.organization.id, body?.period, {
-      force: Boolean(body?.force),
-    });
+    const report = await generateAiReport(
+      supabase,
+      tenant.organization.id,
+      { period: body?.period, from: body?.from, to: body?.to },
+      { force: Boolean(body?.force) },
+    );
     return NextResponse.json({ ok: true, report });
   } catch (err) {
     return aiErrorResponse(err);

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Sparkles, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { PERIODS } from "@/lib/periods";
+import { PERIOD_PRESETS } from "@/lib/period-range";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MarkdownLite } from "./markdown-lite";
@@ -24,18 +24,26 @@ export function AiReportGenerator({
   canGenerate: boolean;
 }) {
   const [period, setPeriod] = useState("30d");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [report, setReport] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const usingCustom = period === "custom";
+
   async function generate(force: boolean) {
+    if (usingCustom && (!from || !to)) {
+      setError("Укажите даты «с» и «по» для произвольного периода.");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const res = await fetch("/api/ai/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ period, force }),
+        body: JSON.stringify({ period, from, to, force }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -66,8 +74,8 @@ export function AiReportGenerator({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="eyebrow mb-2">Период отчёта</p>
-          <div className="inline-flex rounded-xl border border-line-strong bg-ink-700/60 p-1">
-            {PERIODS.map((p) => (
+          <div className="inline-flex flex-wrap gap-1 rounded-xl border border-line-strong bg-ink-700/60 p-1">
+            {PERIOD_PRESETS.map((p) => (
               <button
                 key={p.key}
                 onClick={() => setPeriod(p.key)}
@@ -80,7 +88,36 @@ export function AiReportGenerator({
                 {p.label}
               </button>
             ))}
+            <button
+              onClick={() => setPeriod("custom")}
+              disabled={loading}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                usingCustom ? "bg-ink-500 text-content" : "text-content-muted hover:text-content",
+              )}
+            >
+              Свой
+            </button>
           </div>
+          {usingCustom && (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="date"
+                value={from}
+                max={to || undefined}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-9 rounded-lg border border-line-strong bg-ink-800 px-2 text-xs text-content [color-scheme:dark] focus:border-xray/50 focus:outline-none"
+              />
+              <span className="text-content-faint">—</span>
+              <input
+                type="date"
+                value={to}
+                min={from || undefined}
+                onChange={(e) => setTo(e.target.value)}
+                className="h-9 rounded-lg border border-line-strong bg-ink-800 px-2 text-xs text-content [color-scheme:dark] focus:border-xray/50 focus:outline-none"
+              />
+            </div>
+          )}
         </div>
         {canGenerate ? (
           <div className="flex gap-2">

@@ -13,6 +13,6 @@ export const config = {
      * NEVER pass through the auth middleware — a redirect there returns 307 and
      * Wazzup does not follow redirects, so the message would be lost.
      */
-    "/((?!api/webhooks|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api/webhooks|api/cron|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

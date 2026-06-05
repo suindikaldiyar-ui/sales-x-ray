@@ -33,6 +33,7 @@ export function IntegrationCard({
   status,
   storedKeys,
   lastSyncedAt = null,
+  lastAutoSyncedAt = null,
   webhookOrgId,
   webhookSecret = null,
 }: {
@@ -40,6 +41,7 @@ export function IntegrationCard({
   status: IntegrationStatus;
   storedKeys: string[];
   lastSyncedAt?: string | null;
+  lastAutoSyncedAt?: string | null;
   webhookOrgId?: string;
   webhookSecret?: string | null;
 }) {
@@ -98,6 +100,11 @@ export function IntegrationCard({
                 {isWazzup ? "Синхронизация каналов и менеджеров" : "Синхронизация данных"}
               </p>
               <p className="text-xs text-content-faint">{syncedAgo(lastSyncedAt)}</p>
+              {isAmo && lastAutoSyncedAt && (
+                <p className="text-xs text-content-faint">
+                  Авто: {syncedAgo(lastAutoSyncedAt)}
+                </p>
+              )}
               {isWazzup && (
                 <p className="mt-0.5 text-xs text-content-faint">
                   История переписки — через вебхуки (следующий шаг).

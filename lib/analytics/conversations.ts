@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizePeriod, periodStart, type PeriodKey } from "@/lib/periods";
+import { resolveRange } from "@/lib/period-range";
 
 export interface ConvFeedItem {
   id: string;
@@ -27,7 +27,8 @@ export interface ConversationsData {
   synced: boolean; // a Wazzup sync has run (channels present)
   lastSyncedAt: string | null;
   channels: { transport: string | null; name: string | null; state: string | null }[];
-  period: PeriodKey;
+  period: string;
+  periodLabel: string;
   hasMessages: boolean;
   // analytics (over messages in the period)
   dialogs: number;
@@ -89,10 +90,11 @@ async function fetchAll<T>(
 export async function getConversationsData(
   supabase: SupabaseClient,
   org: string,
-  opts: { period?: string | null },
+  opts: { period?: string | null; from?: string | null; to?: string | null },
 ): Promise<ConversationsData> {
-  const period = normalizePeriod(opts.period);
-  const from = periodStart(period);
+  const range = resolveRange({ period: opts.period, from: opts.from, to: opts.to });
+  const from = range.from ? Math.floor(range.from.getTime() / 1000) : null;
+  const to = range.to ? Math.floor(range.to.getTime() / 1000) : null;
 
   const { data: integration } = await supabase
     .from("integrations")
@@ -176,7 +178,8 @@ export async function getConversationsData(
   }
 
   const convById = new Map<string, ConvRow>(convs.map((c) => [c.id, c]));
-  const inPeriod = (lastAt: number) => from == null || lastAt >= from;
+  const inPeriod = (lastAt: number) =>
+    (from == null || lastAt >= from) && (to == null || lastAt <= to);
 
   let dialogs = 0;
   let newLeads = 0;
@@ -208,7 +211,12 @@ export async function getConversationsData(
     const c = convById.get(cid);
     if (!c) continue;
     dialogs += 1;
-    if (a.firstInbound != null && (from == null || a.firstInbound >= from)) newLeads += 1;
+    if (
+      a.firstInbound != null &&
+      (from == null || a.firstInbound >= from) &&
+      (to == null || a.firstInbound <= to)
+    )
+      newLeads += 1;
     if (a.firstInbound != null && a.firstResponse != null) {
       responseTimes.push(a.firstResponse - a.firstInbound);
     }
@@ -252,7 +260,8 @@ export async function getConversationsData(
     synced: channels.length > 0,
     lastSyncedAt,
     channels,
-    period,
+    period: range.key,
+    periodLabel: range.label,
     hasMessages: msgs.length > 0,
     dialogs,
     newLeads,
