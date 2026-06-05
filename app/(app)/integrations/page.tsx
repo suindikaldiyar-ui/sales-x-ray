@@ -44,6 +44,12 @@ export default async function IntegrationsPage() {
               status={(row?.status as IntegrationStatus) ?? "NOT_CONNECTED"}
               storedKeys={storedKeys}
               lastSyncedAt={row?.last_synced_at ?? null}
+              webhookOrgId={entry.provider === "wazzup" ? tenant.organization.id : undefined}
+              webhookSecret={
+                entry.provider === "wazzup"
+                  ? ((config.webhook_secret as string | undefined) ?? null)
+                  : null
+              }
             />
           );
         })}

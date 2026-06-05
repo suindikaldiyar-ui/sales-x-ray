@@ -327,23 +327,38 @@ Postgres** через RPC (`report_pipelines`, `report_headline`, `report_funnel
   (`/conversations/[id]`). Всё считается из таблиц `messages`/`conversations` и
   оживает, как только сообщения начнут поступать.
 
-### Следующий шаг (после деплоя): приём вебхуков
+### Приём переписки через вебхуки
 
-Эндпоинт-приёмник уже готов, но **выключен** (бездействует, пока не задан
-секрет):
+`GET /v3/users` возвращает **403** для ключей без доступа к users-API — это
+**не ошибка**: имена менеджеров берём из amoCRM и из поля автора сообщения в
+вебхуке. Синхронизация каналов при этом проходит нормально.
 
-- `POST /api/webhooks/wazzup/<orgId>` — сохраняет входящие сообщения в
-  `conversations`/`messages` (service-role клиент, т.к. вебхуки приходят без
-  сессии; жёстко привязан к организации из URL).
-- Включение: задать `integrations.config.webhook_secret` (провайдер `wazzup`) и
-  указать Wazzup: `PATCH https://api.wazzup24.com/v3/webhooks` с
-  `webhooksUri = https://<домен>/api/webhooks/wazzup/<orgId>` и `crmKey =`
-  тот же секрет (Wazzup пришлёт его в заголовке `Authorization`, приёмник
-  сверит). Realtime/подписку специально пока не включаем.
+Эндпоинт-приёмник: `POST /api/webhooks/wazzup/<orgId>` — сохраняет
+входящие/исходящие сообщения в `conversations`/`messages` (service-role клиент,
+т.к. вебхуки приходят без сессии; жёстко привязан к организации из URL; хранит
+`raw` и пишет сырой payload в лог). Секрет проверяется из `?s=` (или заголовка
+`Authorization`).
 
-> Маппинг полей сообщения (inbound/outbound, id) нужно сверить с реальным
-> payload вебхука при включении — поэтому приёмник хранит сырой payload (`raw`)
-> рядом с каждой строкой.
+**Как включить (UI):**
+
+1. **Интеграции → Wazzup → «Включить приём — получить URL»** — сгенерируется
+   секрет (`integrations.config.webhook_secret`) и покажется готовый URL:
+   `https://<домен>/api/webhooks/wazzup/<orgId>?s=<secret>`. Скопируйте его.
+2. Пропишите его в Wazzup: `PATCH https://api.wazzup24.com/v3/webhooks` с
+   заголовком `Authorization: Bearer <ваш Wazzup API-ключ>` и телом:
+   ```json
+   { "webhooksUri": "<скопированный URL>",
+     "subscriptions": { "messagesAndStatuses": true } }
+   ```
+   (curl-пример — в подсказке на карточке Wazzup). Wazzup отправит тестовый
+   POST на URL — приёмник вернёт `200`.
+3. После этого сообщения начнут поступать, и страница **«Переписка»** с
+   аналитикой (диалоги, неотвеченные, скорость ответа, разрез по менеджерам)
+   оживёт. На Vercel должен быть задан `SUPABASE_SERVICE_ROLE_KEY`.
+
+> Маппинг полей сообщения (inbound/outbound, id, authorName) смоделирован
+> защитно и должен быть сверён с реальным payload — приёмник логирует сырой
+> payload (`[wazzup webhook] org=… payload: …`) и хранит `raw` в каждой строке.
 
 ---
 

@@ -116,14 +116,20 @@ export async function syncWazzup(
     console.log(`[sync wazzup] канал ${c.transport ?? "?"} "${c.name ?? c.channelId}" (${c.state ?? "?"})`);
   }
 
-  // Build a message that surfaces partial failures in the UI.
-  const parts: string[] = [`каналов ${channels.length}`];
-  parts.push(usersErr ? `менеджеры недоступны (${usersErr})` : `менеджеров ${users.length}`);
-  if (channelsErr) parts.push(`каналы недоступны (${channelsErr})`);
+  // Build a friendly message. A 403 on /v3/users is expected for keys without
+  // users-API access — it's NOT an error: manager names come from amoCRM (and
+  // from message authorName in webhooks), so we present it as info.
+  const usersForbidden = usersErr != null && /\b40[13]\b/.test(usersErr);
+  let message: string;
+  if (channelsErr) {
+    message = `Каналы недоступны (${channelsErr}). ${usersErr ? `Менеджеры: ${usersErr}.` : ""}`.trim();
+  } else if (usersForbidden) {
+    message = `Каналов синхронизировано: ${channels.length}. Имена менеджеров берём из amoCRM.`;
+  } else if (usersErr) {
+    message = `Каналов ${channels.length}, менеджеры недоступны (${usersErr}).`;
+  } else {
+    message = `Каналов ${channels.length}, менеджеров ${users.length}.`;
+  }
 
-  return {
-    channels: channels.length,
-    users: users.length,
-    message: `${parts.join(", ")}. Переписка — через вебхуки (следующий шаг).`,
-  };
+  return { channels: channels.length, users: users.length, message };
 }

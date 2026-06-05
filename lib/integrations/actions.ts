@@ -99,6 +99,40 @@ export async function testIntegrationAction(
     : { error: result.message };
 }
 
+/**
+ * Generate (or regenerate) the Wazzup webhook secret for the active org and
+ * store it in integrations.config.webhook_secret. The receiver validates it.
+ * Returns nothing sensitive beyond a success flag; the page re-reads the secret
+ * server-side to render the full webhook URL.
+ */
+export async function setWazzupWebhookAction(
+  _prev: IntegrationActionState,
+  _formData: FormData,
+): Promise<IntegrationActionState> {
+  const { organization } = await requireRole(["OWNER", "ROP"]);
+  const supabase = createClient();
+
+  const { data: existing } = await supabase
+    .from("integrations")
+    .select("config")
+    .eq("organization_id", organization.id)
+    .eq("provider", "wazzup")
+    .maybeSingle();
+
+  const config = { ...((existing?.config as Record<string, unknown>) ?? {}) };
+  config.webhook_secret = crypto.randomUUID().replace(/-/g, "");
+
+  const { error } = await supabase
+    .from("integrations")
+    .update({ config })
+    .eq("organization_id", organization.id)
+    .eq("provider", "wazzup");
+  if (error) return { error: error.message };
+
+  revalidatePath("/integrations");
+  return { message: "URL для вебхуков готов." };
+}
+
 /** Disconnect a provider: clear its config and reset status. */
 export async function disconnectIntegrationAction(formData: FormData) {
   const provider = String(formData.get("provider") ?? "") as IntegrationProvider;

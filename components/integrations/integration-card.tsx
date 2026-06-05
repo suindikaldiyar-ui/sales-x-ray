@@ -9,6 +9,7 @@ import { disconnectIntegrationAction } from "@/lib/integrations/actions";
 import { IntegrationForm } from "./integration-form";
 import { SyncButton } from "./sync-button";
 import { TestConnectionButton } from "./test-connection-button";
+import { WazzupWebhook } from "./wazzup-webhook";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<IntegrationStatus, string> = {
@@ -32,11 +33,15 @@ export function IntegrationCard({
   status,
   storedKeys,
   lastSyncedAt = null,
+  webhookOrgId,
+  webhookSecret = null,
 }: {
   entry: ProviderCatalogEntry;
   status: IntegrationStatus;
   storedKeys: string[];
   lastSyncedAt?: string | null;
+  webhookOrgId?: string;
+  webhookSecret?: string | null;
 }) {
   const connected = status === "CONNECTED";
   const [open, setOpen] = useState(!connected);
@@ -107,6 +112,11 @@ export function IntegrationCard({
               showFull={isAmo}
             />
           </div>
+          {isWazzup && webhookOrgId && (
+            <div className="px-5 pb-4">
+              <WazzupWebhook orgId={webhookOrgId} secret={webhookSecret} />
+            </div>
+          )}
         </>
       )}
 

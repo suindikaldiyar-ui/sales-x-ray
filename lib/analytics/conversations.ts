@@ -140,6 +140,9 @@ export async function getConversationsData(
     firstResponse: number | null;
     lastAt: number;
     lastInbound: boolean;
+    /** Manager who replied — taken from the outbound message author (Wazzup
+     * webhook `authorName`), since the Wazzup users directory isn't readable. */
+    manager: string | null;
   }
   const agg = new Map<string, ConvAgg>();
   const byConvMsgs = new Map<string, MsgRow[]>();
@@ -152,12 +155,15 @@ export async function getConversationsData(
     arr.sort((a, b) => toSec(a.sent_at) - toSec(b.sent_at));
     let firstInbound: number | null = null;
     let firstResponse: number | null = null;
+    let manager: string | null = null;
     for (const m of arr) {
       const t = toSec(m.sent_at);
       if (m.direction === "in" && firstInbound == null) firstInbound = t;
       if (m.direction === "out" && firstInbound != null && firstResponse == null && t >= firstInbound) {
         firstResponse = t;
       }
+      // Latest non-empty outbound author wins.
+      if (m.direction === "out" && m.author_name) manager = m.author_name;
     }
     const last = arr[arr.length - 1];
     agg.set(cid, {
@@ -165,6 +171,7 @@ export async function getConversationsData(
       firstResponse,
       lastAt: toSec(last.sent_at),
       lastInbound: last.direction === "in",
+      manager,
     });
   }
 
@@ -177,13 +184,18 @@ export async function getConversationsData(
   const unanswered: ConvFeedItem[] = [];
   const mgrAgg = new Map<string, { name: string; dialogs: number; unanswered: number; resp: number[] }>();
 
+  // Manager name: prefer the message author (Wazzup), fall back to the
+  // conversation's responsible id resolved via wazzup_users (if ever present).
+  const convManager = (c: ConvRow): string | null =>
+    agg.get(c.id)?.manager ?? (c.responsible_user_id ? managerName(c.responsible_user_id) : null);
+
   function toFeedItem(c: ConvRow, lastInbound: boolean, isUnanswered: boolean): ConvFeedItem {
     return {
       id: c.id,
       contactName: c.contact_name,
       contactHandle: c.contact_handle,
       transport: c.transport,
-      managerName: c.responsible_user_id ? managerName(c.responsible_user_id) : null,
+      managerName: convManager(c),
       lastMessageText: c.last_message_text,
       lastMessageAt: c.last_message_at,
       lastMessageInbound: c.last_message_inbound ?? lastInbound,
@@ -203,8 +215,8 @@ export async function getConversationsData(
     const isUnanswered = a.lastInbound;
     if (isUnanswered) unanswered.push(toFeedItem(c, a.lastInbound, true));
 
-    const mid = c.responsible_user_id ?? "—";
-    const mname = managerName(c.responsible_user_id);
+    const mname = a.manager ?? "Без ответственного";
+    const mid = mname;
     const m = mgrAgg.get(mid) ?? { name: mname, dialogs: 0, unanswered: 0, resp: [] };
     m.dialogs += 1;
     if (isUnanswered) m.unanswered += 1;

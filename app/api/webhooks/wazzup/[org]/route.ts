@@ -5,28 +5,41 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Wazzup webhook ingest (DORMANT until activated after deploy).
+ * Wazzup webhook ingest.
  *
- * Wazzup API v3 has no REST endpoint for message history — incoming messages
- * are delivered ONLY here, via webhooks. This endpoint persists them into
- * conversations/messages so the «Переписка» analytics light up.
+ * Wazzup API v3 has no REST endpoint for message history — incoming/outgoing
+ * messages are delivered ONLY here, via webhooks. This endpoint persists them
+ * into conversations/messages so the «Переписка» analytics light up.
  *
- * Activation (next step, after deploy):
- *   1. Set a secret:  integrations.config.webhook_secret  (provider 'wazzup').
- *   2. Point Wazzup at it:  PATCH https://api.wazzup24.com/v3/webhooks
- *        { webhooksUri: "https://<domain>/api/webhooks/wazzup/<orgId>",
- *          subscriptions: { messagesAndStatuses: true } }
- *      with crmKey = the same secret (Wazzup sends it as the Authorization
- *      header, which we verify below).
+ * Security: a per-org secret (integrations.config.webhook_secret) must match.
+ * It is accepted either as the `?s=` query param (recommended — it travels in
+ * the webhooksUri you paste into Wazzup) or as the Authorization header. Runs
+ * with the service-role client (webhooks are unauthenticated) and is hard
+ * scoped to the org in the URL path.
  *
- * Until a webhook_secret is configured the endpoint rejects everything, so it
- * is safe to ship inert. It runs with the service-role client (webhooks are
- * unauthenticated) and is hard-scoped to the org in the URL.
+ * Activation:
+ *   1. Generate the secret in the app (Integrations → Wazzup → «Включить приём»),
+ *      which fills integrations.config.webhook_secret and shows the full URL.
+ *   2. PATCH https://api.wazzup24.com/v3/webhooks
+ *        { "webhooksUri": "<that full URL incl. ?s=...>",
+ *          "subscriptions": { "messagesAndStatuses": true } }
+ *      with header  Authorization: Bearer <your Wazzup API key>.
  *
- * NOTE: the exact message field mapping (inbound vs outbound, ids) must be
- * verified against a real Wazzup payload on first activation — we store the
- * raw payload alongside every row for exactly that reason.
+ * The exact message field mapping must be verified against a REAL payload — we
+ * store the raw payload on every row and log it, so the mapping can be tuned.
  */
+function getSecret(request: NextRequest): string {
+  const q = request.nextUrl.searchParams.get("s");
+  if (q) return q.trim();
+  const auth = request.headers.get("authorization") ?? "";
+  return auth.replace(/^Bearer\s+/i, "").trim();
+}
+
+/** Liveness probe (some setups GET the URL to verify it). */
+export async function GET() {
+  return NextResponse.json({ ok: true, service: "wazzup-webhook" });
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: { org: string } },
@@ -39,10 +52,9 @@ export async function POST(
     return NextResponse.json({ ok: false, error: "server not configured" }, { status: 500 });
   }
 
-  // Verify the per-org webhook secret. Dormant until one is set.
   const { data: integration } = await supabase
     .from("integrations")
-    .select("config, status")
+    .select("config")
     .eq("organization_id", org)
     .eq("provider", "wazzup")
     .maybeSingle();
@@ -54,16 +66,20 @@ export async function POST(
       { status: 403 },
     );
   }
-  const auth = request.headers.get("authorization") ?? "";
-  const provided = auth.replace(/^Bearer\s+/i, "").trim();
-  if (provided !== secret) {
+  if (getSecret(request) !== secret) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const body = await request.json().catch(() => ({}));
+  // Log the raw payload (truncated) so the field mapping can be verified.
+  console.log(
+    `[wazzup webhook] org=${org} payload:`,
+    JSON.stringify(body).slice(0, 3000),
+  );
+
   const messages: any[] = Array.isArray(body?.messages) ? body.messages : [];
 
-  // Wazzup also sends a test ping when the webhook is registered → 200.
+  // Wazzup sends a test ping (and statuses-only webhooks) → just 200.
   if (messages.length === 0) {
     return NextResponse.json({ ok: true });
   }
@@ -74,9 +90,11 @@ export async function POST(
     const messageId = String(m.messageId ?? m.id ?? "");
     if (!chatId || !messageId) continue;
 
-    // Defensive direction inference — verify against a real payload on enable.
+    // Defensive direction inference — verify against a real payload.
     const inbound: boolean =
-      typeof m.inbound === "boolean" ? m.inbound : m.status == null && m.isEcho !== true;
+      typeof m.inbound === "boolean"
+        ? m.inbound
+        : m.status == null && m.isEcho !== true;
     const sentAt = m.dateTime ? new Date(m.dateTime).toISOString() : new Date().toISOString();
     const contactName = m.contact?.name ?? m.authorName ?? null;
     const contactHandle = m.contact?.phone ?? m.contact?.username ?? chatId;
