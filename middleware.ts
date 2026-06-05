@@ -8,9 +8,11 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Match all request paths except static assets and image optimisation
-     * files, so the session is refreshed and protected routes are guarded.
+     * Match all request paths except static assets, image optimisation files,
+     * and the unauthenticated webhook ingest (api/webhooks/**). Webhooks must
+     * NEVER pass through the auth middleware — a redirect there returns 307 and
+     * Wazzup does not follow redirects, so the message would be lost.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api/webhooks|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

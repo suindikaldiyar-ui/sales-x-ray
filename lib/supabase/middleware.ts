@@ -17,6 +17,13 @@ function isPublic(pathname: string): boolean {
  * Must run in middleware so cookies are written back on the response.
  */
 export async function updateSession(request: NextRequest) {
+  // Webhook ingest is unauthenticated (own `?s=` secret check) — never touch it
+  // here. The matcher already excludes it; this is belt-and-suspenders so a
+  // POST can never be redirected (307) away from the route handler.
+  if (request.nextUrl.pathname.startsWith("/api/webhooks/")) {
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -47,7 +54,9 @@ export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Not signed in and trying to reach a protected route → send to login.
-  if (!user && !isPublic(pathname)) {
+  // API routes are never redirected (they return their own JSON 401/403),
+  // otherwise an unauthenticated POST would get a 307 to /login.
+  if (!user && !isPublic(pathname) && !pathname.startsWith("/api/")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirectTo", pathname);

@@ -71,10 +71,10 @@ export async function POST(
   }
 
   const body = await request.json().catch(() => ({}));
-  // Log the raw payload (truncated) so the field mapping can be verified.
+  // Log the full incoming payload so the field mapping can be verified.
   console.log(
-    `[wazzup webhook] org=${org} payload:`,
-    JSON.stringify(body).slice(0, 3000),
+    `[wazzup webhook] method=POST org=${org} status=200 payload:`,
+    JSON.stringify(body),
   );
 
   const messages: any[] = Array.isArray(body?.messages) ? body.messages : [];
