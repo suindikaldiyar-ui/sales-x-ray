@@ -4,6 +4,9 @@ import { ArrowLeft, MessagesSquare } from "lucide-react";
 import { requireTenant } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
 import { getConversationThread } from "@/lib/analytics/conversations";
+import { getAiStatus } from "@/lib/ai/settings";
+import { getCachedAnalyses } from "@/lib/ai/analyze";
+import { ConversationAnalysisPanel } from "@/components/ai/conversation-analysis";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -31,6 +34,10 @@ export default async function ConversationViewPage({
   const thread = await getConversationThread(supabase, tenant.organization.id, params.id);
   if (!thread) notFound();
 
+  const ai = await getAiStatus(supabase, tenant.organization.id);
+  const analyses = await getCachedAnalyses(supabase, tenant.organization.id, [params.id]);
+  const analysis = analyses.get(params.id) ?? null;
+
   return (
     <>
       <div className="mb-5 flex items-center gap-3">
@@ -55,6 +62,16 @@ export default async function ConversationViewPage({
           {thread.transport && <Badge tone="neutral">{thread.transport}</Badge>}
         </div>
       </div>
+
+      {thread.messages.length > 0 && (
+        <div className="mb-6">
+          <ConversationAnalysisPanel
+            conversationId={params.id}
+            initial={analysis}
+            aiReady={ai.ready}
+          />
+        </div>
+      )}
 
       <Card>
         {thread.messages.length === 0 ? (

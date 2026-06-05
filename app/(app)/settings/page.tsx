@@ -1,13 +1,15 @@
 import Link from "next/link";
-import { Building2, BadgeCheck, CreditCard, Plug } from "lucide-react";
+import { Building2, BadgeCheck, CreditCard, Plug, Sparkles } from "lucide-react";
 import { requireTenant, canManageIntegrations } from "@/lib/tenant";
 import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getAiStatus } from "@/lib/ai/settings";
 import { PageHeader } from "@/components/app/page-header";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge, RoleBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { AiSettingsCard } from "@/components/ai/ai-settings-card";
 import type { Subscription } from "@/lib/types/db";
 
 export const metadata = { title: "Настройки — Sales X-Ray" };
@@ -44,6 +46,9 @@ export default async function SettingsPage() {
     .eq("organization_id", tenant.organization.id)
     .maybeSingle();
   const subscription = sub as Subscription | null;
+
+  const ai = await getAiStatus(supabase, tenant.organization.id);
+  const canManage = canManageIntegrations(tenant.role);
 
   return (
     <>
@@ -170,7 +175,7 @@ export default async function SettingsPage() {
               </span>
             }
           />
-          {canManageIntegrations(tenant.role) ? (
+          {canManage ? (
             <Link href="/integrations">
               <Button variant="outline" className="w-full">
                 Управлять интеграциями
@@ -179,6 +184,32 @@ export default async function SettingsPage() {
           ) : (
             <p className="text-sm text-content-muted">
               Управление интеграциями доступно владельцу и РОПу.
+            </p>
+          )}
+        </Card>
+
+        {/* AI (Gemini) */}
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="AI-анализ (Google Gemini)"
+            subtitle="Анализ переписок и AI-отчёты по продажам."
+            action={
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-xray/30 bg-xray/10 text-xray">
+                <Sparkles className="h-4 w-4" />
+              </span>
+            }
+          />
+          {canManage ? (
+            <AiSettingsCard
+              enabled={ai.enabled}
+              hasKey={ai.hasKey}
+              usingGlobalKey={ai.usingGlobalKey}
+              model={ai.model}
+            />
+          ) : (
+            <p className="text-sm text-content-muted">
+              AI-анализ {ai.ready ? "включён" : "выключен"}. Управление доступно
+              владельцу и РОПу.
             </p>
           )}
         </Card>

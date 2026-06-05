@@ -12,6 +12,9 @@ import {
 import { requireTenant, canManageIntegrations } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
 import { getConversationsData, type ConvFeedItem } from "@/lib/analytics/conversations";
+import { getAiStatus } from "@/lib/ai/settings";
+import { getCachedAnalyses, type Interest } from "@/lib/ai/analyze";
+import { AnalyzeBatchButton } from "@/components/ai/analyze-batch-button";
 import { formatNumber } from "@/lib/utils";
 import { PageHeader } from "@/components/app/page-header";
 import { FilterBar } from "@/components/app/filter-bar";
@@ -34,7 +37,14 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(hrs / 24)} дн`;
 }
 
-function ConvRow({ c }: { c: ConvFeedItem }) {
+const INTEREST_BADGE: Record<Interest, { label: string; tone: "good" | "warn" | "bad" }> = {
+  high: { label: "интерес ↑", tone: "good" },
+  medium: { label: "интерес ~", tone: "warn" },
+  low: { label: "интерес ↓", tone: "bad" },
+  cold: { label: "остыл", tone: "bad" },
+};
+
+function ConvRow({ c, interest }: { c: ConvFeedItem; interest?: Interest }) {
   return (
     <Link
       href={`/conversations/${c.id}`}
@@ -50,6 +60,7 @@ function ConvRow({ c }: { c: ConvFeedItem }) {
           </p>
           {c.transport && <Badge tone="neutral">{c.transport}</Badge>}
           {c.unanswered && <Badge tone="bad">не отвечено</Badge>}
+          {interest && <Badge tone={INTEREST_BADGE[interest].tone}>{INTEREST_BADGE[interest].label}</Badge>}
         </div>
         <p className="mt-0.5 truncate text-sm text-content-faint">
           {c.lastMessageInbound ? "← " : "→ "}
@@ -78,6 +89,12 @@ export default async function ConversationsPage({
   const data = await getConversationsData(supabase, tenant.organization.id, {
     period: searchParams.period,
   });
+  const ai = await getAiStatus(supabase, tenant.organization.id);
+  const analyses = await getCachedAnalyses(
+    supabase,
+    tenant.organization.id,
+    data.feed.map((c) => c.id),
+  );
 
   if (!data.connected) {
     return (
@@ -113,12 +130,15 @@ export default async function ConversationsPage({
         title="Переписка"
         description={`Каналы Wazzup: ${data.channels.map((c) => c.transport ?? c.name).filter(Boolean).join(", ") || "—"}`}
         action={
-          <div className="flex flex-wrap gap-1.5">
-            {data.channels.map((c, i) => (
-              <Badge key={i} tone="xray">
-                {c.transport ?? c.name ?? "канал"}
-              </Badge>
-            ))}
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {data.channels.map((c, i) => (
+                <Badge key={i} tone="xray">
+                  {c.transport ?? c.name ?? "канал"}
+                </Badge>
+              ))}
+            </div>
+            {ai.ready && canManage && data.hasMessages && <AnalyzeBatchButton />}
           </div>
         }
       />
@@ -176,7 +196,7 @@ export default async function ConversationsPage({
           ) : (
             <div className="pb-2">
               {data.feed.map((c) => (
-                <ConvRow key={c.id} c={c} />
+                <ConvRow key={c.id} c={c} interest={analyses.get(c.id)?.interest} />
               ))}
             </div>
           )}
