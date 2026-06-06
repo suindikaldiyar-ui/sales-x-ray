@@ -76,9 +76,9 @@ export function CallAnalysisButton({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink-900/70 backdrop-blur-sm" onClick={() => setOpen(false)} />
-          <div className="panel scroll-slim relative z-10 max-h-[85vh] w-full max-w-lg overflow-y-auto p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 text-left">
+          <div className="absolute inset-0 bg-ink-900/85 backdrop-blur-sm" onClick={() => setOpen(false)} />
+          <div className="panel scroll-slim relative z-10 max-h-[85vh] w-full max-w-2xl overflow-y-auto p-6 text-left">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="flex items-center gap-2 font-display text-base font-semibold text-content">
                 <Sparkles className="h-4 w-4 text-xray" /> AI-анализ звонка
