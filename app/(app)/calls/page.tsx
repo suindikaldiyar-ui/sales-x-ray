@@ -16,6 +16,7 @@ import { PageHeader } from "@/components/app/page-header";
 import { FilterBar } from "@/components/app/filter-bar";
 import { SyncButton } from "@/components/integrations/sync-button";
 import { StatCard } from "@/components/app/stat-card";
+import { CallRecordPlayer } from "@/components/calls/call-record-player";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -122,14 +123,15 @@ export default async function CallsPage({
           {/* calls list */}
           <Card className="overflow-x-auto p-0 lg:col-span-2">
             <CardHeader title="Звонки" subtitle="Последние за период" className="px-5 pt-5" />
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-y border-line text-left text-xs font-medium uppercase tracking-wider text-content-faint">
                   <th className="px-5 py-2.5">Время</th>
                   <th className="px-3 py-2.5">Номер</th>
                   <th className="px-3 py-2.5">Менеджер</th>
                   <th className="px-3 py-2.5 text-right">Длит.</th>
-                  <th className="px-5 py-2.5 text-right">Статус</th>
+                  <th className="px-3 py-2.5 text-right">Статус</th>
+                  <th className="px-5 py-2.5 text-right">Запись</th>
                 </tr>
               </thead>
               <tbody>
@@ -150,7 +152,7 @@ export default async function CallsPage({
                     <td className="nums px-3 py-2.5 text-content">{c.clientPhone ?? "—"}</td>
                     <td className="px-3 py-2.5 text-content-muted">{c.managerName ?? "—"}</td>
                     <td className="nums px-3 py-2.5 text-right text-content-muted">{fmtDuration(c.durationSec)}</td>
-                    <td className="px-5 py-2.5 text-right">
+                    <td className="px-3 py-2.5 text-right">
                       {c.answered ? (
                         <Badge tone="good">отвечен</Badge>
                       ) : (
@@ -158,6 +160,9 @@ export default async function CallsPage({
                           <PhoneMissed className="h-3 w-3" /> пропущен
                         </Badge>
                       )}
+                    </td>
+                    <td className="px-5 py-2.5 text-right">
+                      {c.hasRecord ? <CallRecordPlayer callId={c.id} /> : null}
                     </td>
                   </tr>
                 ))}

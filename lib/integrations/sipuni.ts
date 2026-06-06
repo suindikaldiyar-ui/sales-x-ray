@@ -126,6 +126,41 @@ export class SipuniApiClient {
     const csv = await this.getCallStatsCsv(fromDate, toDate);
     return parseCallsCsv(csv);
   }
+
+  /** Download a call recording (binary). Auth = same md5-hash as export. */
+  async getRecordById(recordId: string): Promise<{ data: ArrayBuffer; contentType: string }> {
+    const url = authedUrl("/statistic/record", [
+      ["id", recordId],
+      ["user", this.user],
+      ["secret", this.secret],
+    ]);
+    const safe = url.replace(/hash=[^&]+/, "hash=***");
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", cache: "no-store" });
+    } catch (e) {
+      console.error(`[sipuni record] POST ${safe} -> network error`, e);
+      throw new Error("Не удалось связаться с Sipuni (сеть).");
+    }
+    const ct = res.headers.get("content-type") || "";
+    if (res.status === 401 || res.status === 403) {
+      console.error(`[sipuni record] POST ${safe} -> ${res.status}`);
+      throw new Error("Sipuni 401/403: неверный API-ключ или нет доступа к записи.");
+    }
+    if (res.status > 204) {
+      const body = await res.text().catch(() => "");
+      console.error(`[sipuni record] POST ${safe} -> ${res.status} ${body.slice(0, 300)}`);
+      throw new Error(`Sipuni ${res.status}: запись недоступна.`);
+    }
+    const data = await res.arrayBuffer();
+    console.log(`[sipuni record] POST ${safe} -> ${res.status} ct=${ct} bytes=${data.byteLength}`);
+    // If Sipuni returned a JSON/text error with 200, it's not audio.
+    if (!ct.includes("audio") && !ct.includes("octet-stream") && data.byteLength < 200) {
+      const txt = Buffer.from(data).toString("utf8").slice(0, 200);
+      throw new Error(`Sipuni не вернул аудио: ${txt}`);
+    }
+    return { data, contentType: ct.includes("audio") ? ct : "audio/mpeg" };
+  }
 }
 
 export function createSipuniClient(config: SipuniConfig): SipuniApiClient {

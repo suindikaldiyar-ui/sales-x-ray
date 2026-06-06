@@ -10,6 +10,7 @@ export interface CallItem {
   durationSec: number;
   status: string | null;
   answered: boolean;
+  hasRecord: boolean;
   startedAt: string | null;
 }
 
@@ -47,6 +48,7 @@ interface CallRow {
   duration_sec: number | null;
   status: string | null;
   answered: boolean | null;
+  has_record: boolean | null;
   started_at: string | null;
 }
 
@@ -62,7 +64,7 @@ async function fetchAll(
   for (let from = 0; ; from += size) {
     const { data, error } = await supabase
       .from("calls")
-      .select("id, direction, client_phone, manager_name, duration_sec, status, answered, started_at")
+      .select("id, direction, client_phone, manager_name, duration_sec, status, answered, has_record, started_at")
       .eq("organization_id", org)
       .eq("source", "sipuni")
       .order("id", { ascending: true })
@@ -153,6 +155,7 @@ export async function getCallsData(
       durationSec: c.duration_sec ?? 0,
       status: c.status,
       answered: Boolean(c.answered),
+      hasRecord: Boolean(c.has_record),
       startedAt: c.started_at,
     }));
 
