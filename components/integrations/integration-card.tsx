@@ -49,10 +49,19 @@ export function IntegrationCard({
   const [open, setOpen] = useState(!connected);
   const isAmo = entry.provider === "amocrm";
   const isWazzup = entry.provider === "wazzup";
-  const canSync = (isAmo || isWazzup) && connected;
-  const syncEndpoint = isWazzup ? "/api/sync/wazzup" : "/api/sync/amocrm";
-  const syncLabel = isWazzup ? "Синхронизировать каналы" : "Синхронизировать";
-  const canTest = isAmo || isWazzup;
+  const isSipuni = entry.provider === "sipuni";
+  const canSync = (isAmo || isWazzup || isSipuni) && connected;
+  const syncEndpoint = isWazzup
+    ? "/api/sync/wazzup"
+    : isSipuni
+      ? "/api/sync/sipuni"
+      : "/api/sync/amocrm";
+  const syncLabel = isWazzup
+    ? "Синхронизировать каналы"
+    : isSipuni
+      ? "Синхронизировать звонки"
+      : "Синхронизировать";
+  const canTest = isAmo || isWazzup || isSipuni;
 
   return (
     <div
