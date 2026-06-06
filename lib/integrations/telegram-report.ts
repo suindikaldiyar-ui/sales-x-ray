@@ -131,7 +131,8 @@ function buildMessage(
       L.push(`👥 <b>Звонки по менеджерам</b>`);
       for (const m of topManagers) {
         const miss = m.missed > 0 ? `⚠️${m.missed}` : `0`;
-        L.push(`• ${esc(m.name)} — ✅${m.answered} / ${miss}`);
+        const mname = m.name === "Без ответственного" ? "Нет в amoCRM (новые номера)" : m.name;
+        L.push(`• ${esc(mname)} — ✅${m.answered} / ${miss}`);
       }
     }
   } else {
@@ -166,7 +167,12 @@ function buildMessage(
     if (unanswered.length) {
       L.push(`<i>Без ответа в переписке:</i>`);
       for (const u of unanswered) {
-        L.push(`• ${esc(u.contactName ?? u.contactHandle ?? "—")}`);
+        // Phone first (contactHandle = client phone from the Wazzup contact),
+        // so the manager can find them in amoCRM/Wazzup; name as a fallback.
+        const phone = u.contactHandle?.trim();
+        const name = u.contactName?.trim();
+        const label = phone ? (name ? `${phone} (${name})` : phone) : (name ?? "—");
+        L.push(`• ${esc(label)}`);
       }
     }
   }
