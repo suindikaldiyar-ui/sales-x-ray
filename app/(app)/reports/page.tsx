@@ -8,6 +8,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { AiReportGenerator } from "@/components/ai/ai-report-generator";
+import { TelegramTestButton } from "@/components/reports/telegram-test-button";
 import { MarkdownLite } from "@/components/ai/markdown-lite";
 import { PERIOD_PRESETS } from "@/lib/period-range";
 import { fmtDate } from "@/lib/datetime";
@@ -36,10 +37,13 @@ export default async function ReportsPage() {
         title="Отчёты"
         description="AI-отчёт по продажам: где теряются сделки, слабые менеджеры и рекомендации."
         action={
-          <Badge tone={ai.ready ? "xray" : "neutral"}>
-            <Sparkles className="h-3.5 w-3.5" />
-            {ai.ready ? "Gemini готов" : "AI выключен"}
-          </Badge>
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <Badge tone={ai.ready ? "xray" : "neutral"}>
+              <Sparkles className="h-3.5 w-3.5" />
+              {ai.ready ? "Gemini готов" : "AI выключен"}
+            </Badge>
+            {canManage && <TelegramTestButton />}
+          </div>
         }
       />
 
