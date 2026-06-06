@@ -11,6 +11,7 @@ export interface CallItem {
   status: string | null;
   answered: boolean;
   hasRecord: boolean;
+  hasAnalysis: boolean;
   startedAt: string | null;
 }
 
@@ -144,6 +145,13 @@ export async function getCallsData(
     }))
     .sort((a, b) => b.total - a.total);
 
+  // Which calls already have a cached AI analysis (for the list indicator).
+  const { data: an } = await supabase
+    .from("call_analysis")
+    .select("call_id")
+    .eq("organization_id", org);
+  const analyzed = new Set(((an as any[]) ?? []).map((r) => r.call_id as string));
+
   const calls: CallItem[] = [...rows]
     .sort((a, b) => toSec(b.started_at) - toSec(a.started_at))
     .slice(0, 100)
@@ -156,6 +164,7 @@ export async function getCallsData(
       status: c.status,
       answered: Boolean(c.answered),
       hasRecord: Boolean(c.has_record),
+      hasAnalysis: analyzed.has(c.id),
       startedAt: c.started_at,
     }));
 

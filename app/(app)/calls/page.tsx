@@ -10,6 +10,7 @@ import {
 import { requireTenant, canManageIntegrations } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
 import { getCallsData, fmtDuration } from "@/lib/analytics/calls";
+import { getAiStatus } from "@/lib/ai/settings";
 import { formatNumber } from "@/lib/utils";
 import { fmtChatTime } from "@/lib/datetime";
 import { PageHeader } from "@/components/app/page-header";
@@ -17,6 +18,7 @@ import { FilterBar } from "@/components/app/filter-bar";
 import { SyncButton } from "@/components/integrations/sync-button";
 import { StatCard } from "@/components/app/stat-card";
 import { CallRecordPlayer } from "@/components/calls/call-record-player";
+import { CallAnalysisButton } from "@/components/calls/call-analysis-button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -37,6 +39,7 @@ export default async function CallsPage({
     from: searchParams.from,
     to: searchParams.to,
   });
+  const ai = await getAiStatus(supabase, tenant.organization.id);
 
   if (!data.connected) {
     return (
@@ -162,7 +165,16 @@ export default async function CallsPage({
                       )}
                     </td>
                     <td className="px-5 py-2.5 text-right">
-                      {c.hasRecord ? <CallRecordPlayer callId={c.id} /> : null}
+                      {c.hasRecord ? (
+                        <div className="flex flex-col items-end gap-1.5">
+                          <CallRecordPlayer callId={c.id} />
+                          <CallAnalysisButton
+                            callId={c.id}
+                            hasAnalysis={c.hasAnalysis}
+                            aiReady={ai.ready}
+                          />
+                        </div>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
