@@ -186,6 +186,15 @@ export async function getReportData(
     supabase.rpc("report_manager_stages", { p_org: org, p_from: pFrom, p_to: pTo }),
   ]);
 
+  // Surface RPC errors that would otherwise be swallowed (e.g. an empty funnel).
+  if (funnelRes.error) console.error("[report] report_funnel RPC error:", funnelRes.error.message);
+  if (headRes.error) console.error("[report] report_headline RPC error:", headRes.error.message);
+  if (lossRes.error) console.error("[report] report_loss_reasons RPC error:", lossRes.error.message);
+  if (mgrRes.error) console.error("[report] report_managers RPC error:", mgrRes.error.message);
+  console.log(
+    `[report] report_funnel raw: ${Array.isArray(funnelRes.data) ? funnelRes.data.length : 0} строк этапов`,
+  );
+
   const stageAggs: StageAgg[] = ((funnelRes.data as any[]) ?? []).map((r) => ({
     rank: num(r.rank),
     name: r.name,
