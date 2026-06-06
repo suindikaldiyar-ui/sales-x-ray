@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { messagePreview, isAttachment } from "@/lib/messages";
 import { VoiceTranscribe } from "@/components/ai/voice-transcribe";
+import { fmtChatTime } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
 const IMAGE_TYPES = ["image", "picture"];
@@ -19,15 +20,7 @@ const VOICE_TYPES = ["voice", "audio", "ptt"];
 
 export const metadata = { title: "Диалог — Sales X-Ray" };
 
-function fmtTime(iso: string | null): string {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+const fmtTime = fmtChatTime;
 
 export default async function ConversationViewPage({
   params,

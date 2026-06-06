@@ -30,15 +30,23 @@ export interface ResolvedRange {
   toParam: string | null;
 }
 
-function startOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+// Day boundaries are computed in Almaty time (UTC+5, no DST) so "Сегодня"/
+// "Вчера" match the real calendar day in Kazakhstan, then expressed as UTC
+// instants for the timestamptz filter.
+const ALMATY_OFFSET_MS = 5 * 60 * 60 * 1000;
+
+/** Start of the Almaty day containing instant `d`, as a UTC Date. */
+function startOfAlmatyDay(d: Date): Date {
+  const shifted = new Date(d.getTime() + ALMATY_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - ALMATY_OFFSET_MS);
 }
-function endOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+
+/** Almaty calendar date "YYYY-MM-DD" → UTC instant of its 00:00. */
+function almatyDateStart(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return new Date(NaN);
+  return new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - ALMATY_OFFSET_MS);
 }
 
 function rolling(days: number, label: string, now: Date): ResolvedRange {
@@ -57,8 +65,8 @@ export function resolveRange(p: RangeParams, now: Date = new Date()): ResolvedRa
   const period = p.period ?? "30d";
 
   if (period === "custom" && p.from && p.to) {
-    const from = startOfDay(new Date(p.from));
-    const to = endOfDay(new Date(p.to));
+    const from = almatyDateStart(p.from);
+    const to = new Date(almatyDateStart(p.to).getTime() + 86400000 - 1);
     if (!isNaN(from.getTime()) && !isNaN(to.getTime())) {
       return { key: "custom", label: `${p.from} — ${p.to}`, from, to, fromParam: p.from, toParam: p.to };
     }
@@ -66,11 +74,12 @@ export function resolveRange(p: RangeParams, now: Date = new Date()): ResolvedRa
 
   switch (period) {
     case "today":
-      return { key: "today", label: "Сегодня", from: startOfDay(now), to: null, fromParam: null, toParam: null };
+      return { key: "today", label: "Сегодня", from: startOfAlmatyDay(now), to: null, fromParam: null, toParam: null };
     case "yesterday": {
-      const y = new Date(now);
-      y.setDate(now.getDate() - 1);
-      return { key: "yesterday", label: "Вчера", from: startOfDay(y), to: endOfDay(y), fromParam: null, toParam: null };
+      const todayStart = startOfAlmatyDay(now);
+      const from = new Date(todayStart.getTime() - 86400000);
+      const to = new Date(todayStart.getTime() - 1);
+      return { key: "yesterday", label: "Вчера", from, to, fromParam: null, toParam: null };
     }
     case "7d":
       return rolling(7, "7 дней", now);

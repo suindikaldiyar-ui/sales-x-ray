@@ -4,6 +4,7 @@ import { requireTenant, canManageIntegrations } from "@/lib/tenant";
 import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { getAiStatus } from "@/lib/ai/settings";
+import { fmtDate } from "@/lib/datetime";
 import { PageHeader } from "@/components/app/page-header";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge, RoleBadge } from "@/components/ui/badge";
@@ -27,13 +28,7 @@ const STATUS_LABELS: Record<string, string> = {
   CANCELED: "Отменена",
 };
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("ru-RU", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
+const formatDate = fmtDate;
 
 export default async function SettingsPage() {
   const tenant = await requireTenant();

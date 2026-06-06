@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { AiReportGenerator } from "@/components/ai/ai-report-generator";
 import { MarkdownLite } from "@/components/ai/markdown-lite";
 import { PERIOD_PRESETS } from "@/lib/period-range";
+import { fmtDate } from "@/lib/datetime";
 
 export const metadata = { title: "Отчёты — Sales X-Ray" };
 
@@ -76,7 +77,7 @@ export default async function ReportsPage() {
                     </span>
                     <span className="flex items-center gap-3 text-xs text-content-faint">
                       <Badge tone="neutral">{periodLabel(h.period)}</Badge>
-                      {new Date(h.createdAt).toLocaleDateString("ru-RU")}
+                      {fmtDate(h.createdAt)}
                     </span>
                   </summary>
                   <div className="mt-3 border-t border-line pt-3">

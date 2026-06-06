@@ -7,6 +7,7 @@ import { PERIOD_PRESETS } from "@/lib/period-range";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MarkdownLite } from "./markdown-lite";
+import { fmtDateTime } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
 interface ReportResult {
@@ -148,7 +149,7 @@ export function AiReportGenerator({
           <div className="mb-2 flex items-center justify-between">
             <h3 className="font-display text-base font-semibold text-content">{report.title}</h3>
             <span className="text-xs text-content-faint">
-              {new Date(report.createdAt).toLocaleString("ru-RU")}
+              {fmtDateTime(report.createdAt)}
             </span>
           </div>
           <MarkdownLite content={report.content} />
