@@ -90,30 +90,40 @@ export async function POST(
     const messageId = String(m.messageId ?? m.id ?? "");
     if (!chatId || !messageId) continue;
 
-    // Defensive direction inference — verify against a real payload.
-    const inbound: boolean =
-      typeof m.inbound === "boolean"
-        ? m.inbound
-        : m.status == null && m.isEcho !== true;
+    const inbound = isInbound(m);
+    // inbound → author is the client; outbound → the manager (authorName).
+    const authorName = inbound
+      ? (m.contact?.name ?? null)
+      : (m.authorName ?? m.author?.name ?? null);
     const sentAt = m.dateTime ? new Date(m.dateTime).toISOString() : new Date().toISOString();
-    const contactName = m.contact?.name ?? m.authorName ?? null;
+    const contactName: string | null = m.contact?.name ?? null;
     const contactHandle = m.contact?.phone ?? m.contact?.username ?? chatId;
 
-    await supabase.from("conversations").upsert(
-      {
-        organization_id: org,
-        external_id: chatId,
-        source: "wazzup",
-        channel_id: m.channelId ?? null,
-        transport: m.chatType ?? m.transport ?? null,
-        contact_name: contactName,
-        contact_handle: contactHandle,
-        last_message_at: sentAt,
-        last_message_text: m.text ?? null,
-        last_message_inbound: inbound,
-      },
-      { onConflict: "organization_id,external_id" },
+    // Log the direction-relevant fields so the mapping can be verified.
+    console.log(
+      `[wazzup webhook] msg id=${messageId} status=${m.status} isEcho=${m.isEcho} ` +
+        `inbound_field=${m.inbound} type=${m.type} authorName=${m.authorName} ` +
+        `contact=${m.contact?.name} -> dir=${inbound ? "in" : "out"}`,
     );
+
+    // Build the conversation patch — don't overwrite a known contact name with
+    // null (outbound messages may omit the contact).
+    const convPatch: Record<string, unknown> = {
+      organization_id: org,
+      external_id: chatId,
+      source: "wazzup",
+      channel_id: m.channelId ?? null,
+      transport: m.chatType ?? m.transport ?? null,
+      contact_handle: contactHandle,
+      last_message_at: sentAt,
+      last_message_text: m.text ?? null,
+      last_message_inbound: inbound,
+    };
+    if (contactName) convPatch.contact_name = contactName;
+
+    await supabase
+      .from("conversations")
+      .upsert(convPatch, { onConflict: "organization_id,external_id" });
 
     const { data: conv } = await supabase
       .from("conversations")
@@ -129,8 +139,8 @@ export async function POST(
         conversation_id: conv.id,
         external_id: messageId,
         direction: inbound ? "in" : "out",
-        author: m.authorName ?? null,
-        author_name: m.authorName ?? null,
+        author: authorName,
+        author_name: authorName,
         body: m.text ?? null,
         status: m.status ?? null,
         message_type: m.type ?? null,
@@ -143,4 +153,25 @@ export async function POST(
   }
 
   return NextResponse.json({ ok: true, saved });
+}
+
+/**
+ * Wazzup v3 marks INCOMING messages with status "inbound"; outgoing ones carry
+ * a delivery status (sent/delivered/read/error) and `isEcho` = sent from the
+ * messenger app (still outbound). So: inbound iff status === "inbound".
+ * Falls back to explicit boolean/direction fields if status is absent.
+ */
+function isInbound(m: any): boolean {
+  const status = String(m?.status ?? "").toLowerCase();
+  if (status === "inbound") return true;
+  if (["sent", "delivered", "read", "error", "pending", "sending"].includes(status)) {
+    return false;
+  }
+  if (typeof m?.inbound === "boolean") return m.inbound;
+  const dir = String(m?.direction ?? "").toLowerCase();
+  if (["in", "inbound", "incoming"].includes(dir)) return true;
+  if (["out", "outbound", "outgoing"].includes(dir)) return false;
+  if (m?.isEcho === true) return false; // sent from the app by a manager
+  // No clear signal → treat as outbound (delivery-status messages dominate).
+  return false;
 }
