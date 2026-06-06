@@ -98,12 +98,16 @@ export async function POST(
     const sentAt = m.dateTime ? new Date(m.dateTime).toISOString() : new Date().toISOString();
     const contactName: string | null = m.contact?.name ?? null;
     const contactHandle = m.contact?.phone ?? m.contact?.username ?? chatId;
+    // Text lives in `text` (try a couple of fallbacks just in case).
+    const textBody: string | null = m.text ?? m.content ?? m.body ?? null;
+    const msgType: string | null = m.type ?? null;
 
-    // Log the direction-relevant fields so the mapping can be verified.
+    // Log the direction + type + text fields so the mapping can be verified.
     console.log(
       `[wazzup webhook] msg id=${messageId} status=${m.status} isEcho=${m.isEcho} ` +
-        `inbound_field=${m.inbound} type=${m.type} authorName=${m.authorName} ` +
-        `contact=${m.contact?.name} -> dir=${inbound ? "in" : "out"}`,
+        `type=${m.type} inbound_field=${m.inbound} authorName=${m.authorName} ` +
+        `contact=${m.contact?.name} text="${(textBody ?? "").slice(0, 60)}" ` +
+        `-> dir=${inbound ? "in" : "out"}`,
     );
 
     // Build the conversation patch — don't overwrite a known contact name with
@@ -116,7 +120,8 @@ export async function POST(
       transport: m.chatType ?? m.transport ?? null,
       contact_handle: contactHandle,
       last_message_at: sentAt,
-      last_message_text: m.text ?? null,
+      last_message_text: textBody,
+      last_message_type: msgType,
       last_message_inbound: inbound,
     };
     if (contactName) convPatch.contact_name = contactName;
@@ -141,9 +146,9 @@ export async function POST(
         direction: inbound ? "in" : "out",
         author: authorName,
         author_name: authorName,
-        body: m.text ?? null,
+        body: textBody,
         status: m.status ?? null,
-        message_type: m.type ?? null,
+        message_type: msgType,
         sent_at: sentAt,
         raw: m,
       },

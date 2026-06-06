@@ -9,6 +9,7 @@ export interface ConvFeedItem {
   transport: string | null;
   managerName: string | null;
   lastMessageText: string | null;
+  lastMessageType: string | null;
   lastMessageAt: string | null;
   lastMessageInbound: boolean | null;
   unanswered: boolean;
@@ -49,6 +50,7 @@ interface ConvRow {
   responsible_user_id: string | null;
   last_message_at: string | null;
   last_message_text: string | null;
+  last_message_type: string | null;
   last_message_inbound: boolean | null;
 }
 
@@ -121,7 +123,7 @@ export async function getConversationsData(
     fetchAll<ConvRow>(
       supabase,
       "conversations",
-      "id, external_id, contact_name, contact_handle, transport, responsible_user_id, last_message_at, last_message_text, last_message_inbound",
+      "id, external_id, contact_name, contact_handle, transport, responsible_user_id, last_message_at, last_message_text, last_message_type, last_message_inbound",
       (q) => q.eq("organization_id", org).eq("source", "wazzup"),
     ),
     fetchAll<MsgRow>(
@@ -200,6 +202,7 @@ export async function getConversationsData(
       transport: c.transport,
       managerName: convManager(c),
       lastMessageText: c.last_message_text,
+      lastMessageType: c.last_message_type,
       lastMessageAt: c.last_message_at,
       lastMessageInbound: c.last_message_inbound ?? lastInbound,
       unanswered: isUnanswered,
@@ -278,6 +281,7 @@ export interface ThreadMessage {
   inbound: boolean;
   authorName: string | null;
   body: string | null;
+  type: string | null;
   sentAt: string | null;
 }
 export interface ConversationThread {
@@ -303,7 +307,7 @@ export async function getConversationThread(
 
   const { data: msgs } = await supabase
     .from("messages")
-    .select("id, direction, author_name, body, sent_at")
+    .select("id, direction, author_name, body, message_type, sent_at")
     .eq("organization_id", org)
     .eq("conversation_id", conversationId)
     .order("sent_at", { ascending: true })
@@ -318,6 +322,7 @@ export async function getConversationThread(
       inbound: m.direction === "in",
       authorName: m.author_name,
       body: m.body,
+      type: m.message_type,
       sentAt: m.sent_at,
     })),
   };

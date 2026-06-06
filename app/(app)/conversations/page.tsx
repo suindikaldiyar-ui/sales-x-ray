@@ -15,6 +15,7 @@ import { getConversationsData, type ConvFeedItem } from "@/lib/analytics/convers
 import { getAiStatus } from "@/lib/ai/settings";
 import { getCachedAnalyses, type Interest } from "@/lib/ai/analyze";
 import { AnalyzeBatchButton } from "@/components/ai/analyze-batch-button";
+import { messagePreview } from "@/lib/messages";
 import { formatNumber } from "@/lib/utils";
 import { PageHeader } from "@/components/app/page-header";
 import { FilterBar } from "@/components/app/filter-bar";
@@ -64,7 +65,7 @@ function ConvRow({ c, interest }: { c: ConvFeedItem; interest?: Interest }) {
         </div>
         <p className="mt-0.5 truncate text-sm text-content-faint">
           {c.lastMessageInbound ? "← " : "→ "}
-          {c.lastMessageText ?? "—"}
+          {messagePreview(c.lastMessageText, c.lastMessageType)}
         </p>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">

@@ -10,6 +10,7 @@ import { ConversationAnalysisPanel } from "@/components/ai/conversation-analysis
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { messagePreview, isAttachment } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Диалог — Sales X-Ray" };
@@ -98,7 +99,14 @@ export default async function ConversationViewPage({
                   {!m.inbound && m.authorName && (
                     <p className="mb-0.5 text-xs font-medium text-xray">{m.authorName}</p>
                   )}
-                  <p className="whitespace-pre-wrap break-words">{m.body ?? "—"}</p>
+                  <p
+                    className={cn(
+                      "whitespace-pre-wrap break-words",
+                      isAttachment(m.body, m.type) && "italic text-content-muted",
+                    )}
+                  >
+                    {messagePreview(m.body, m.type)}
+                  </p>
                   <p className="mt-1 text-right text-[10px] text-content-faint">
                     {fmtTime(m.sentAt)}
                   </p>
