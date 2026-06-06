@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runIncrementalSync } from "@/lib/integrations/amocrm-cron";
 import { syncSipuni, SIPUNI_WINDOW_DAYS } from "@/lib/integrations/sipuni-sync";
+import { sendTelegramReport } from "@/lib/integrations/telegram-report";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Hobby may cap lower; we bound work with a deadline
@@ -84,13 +85,42 @@ async function handle(request: NextRequest) {
     }
   }
 
+  // ── Daily Telegram report — AFTER syncs, for orgs that have data sources ──
+  const { data: wzRows } = await supabase
+    .from("integrations")
+    .select("organization_id")
+    .eq("provider", "wazzup")
+    .eq("status", "CONNECTED")
+    .limit(MAX_ORGS);
+  const reportOrgs = new Set<string>([
+    ...sipuniOrgs,
+    ...(((wzRows as any[]) ?? []).map((r) => r.organization_id as string)),
+  ]);
+  const tgResults: any[] = [];
+  for (const org of reportOrgs) {
+    if (Date.now() >= deadline) {
+      tgResults.push({ organizationId: org, skipped: "deadline" });
+      continue;
+    }
+    try {
+      const r = await sendTelegramReport(supabase, org);
+      tgResults.push({ organizationId: org, ...r });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[telegram report] org=${org} cron error:`, message);
+      tgResults.push({ organizationId: org, error: message });
+    }
+  }
+
   console.log(
-    `[cron sync] amoCRM орг: ${results.length}, Sipuni орг: ${sipuniResults.length}`,
+    `[cron sync] amoCRM орг: ${results.length}, Sipuni орг: ${sipuniResults.length}, ` +
+      `Telegram-отчётов: ${tgResults.filter((r) => r.sent).length}/${tgResults.length}`,
   );
   return NextResponse.json({
     ok: true,
     amocrm: { count: results.length, results },
     sipuni: { count: sipuniResults.length, results: sipuniResults },
+    telegram: { count: tgResults.length, results: tgResults },
   });
 }
 
