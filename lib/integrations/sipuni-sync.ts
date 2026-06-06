@@ -4,8 +4,10 @@ import { createSipuniClient, type SipuniConfig, type SipuniCall } from "./sipuni
 
 export class SipuniConfigError extends Error {}
 
-/** How far back the calls sync pulls (Sipuni export is one request). */
+/** Full history window (nightly cron). Sipuni export is one (slow) request. */
 export const SIPUNI_WINDOW_DAYS = Number(process.env.SIPUNI_WINDOW_DAYS) || 90;
+/** Small window for the MANUAL "Синхронизировать сейчас" — fits in 60s. */
+export const SIPUNI_MANUAL_WINDOW_DAYS = Number(process.env.SIPUNI_MANUAL_WINDOW_DAYS) || 2;
 
 export interface SipuniSyncSummary {
   total: number;
@@ -40,7 +42,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
 export async function syncSipuni(
   supabase: SupabaseClient,
   org: string,
+  opts: { days?: number } = {},
 ): Promise<SipuniSyncSummary> {
+  const windowDays = opts.days ?? SIPUNI_WINDOW_DAYS;
   const { data: integration, error: intErr } = await supabase
     .from("integrations")
     .select("config")
@@ -58,7 +62,7 @@ export async function syncSipuni(
 
   const client = createSipuniClient(config as SipuniConfig);
   const to = new Date();
-  const from = new Date(to.getTime() - SIPUNI_WINDOW_DAYS * 86400000);
+  const from = new Date(to.getTime() - windowDays * 86400000);
 
   const calls: SipuniCall[] = await client.getCalls(from, to);
   const before = await countCalls(supabase, org);
@@ -103,7 +107,7 @@ export async function syncSipuni(
   const missed = rows.length - answered;
   console.log(
     `[sipuni] sync итог: добавлено=${added}, обработано=${rows.length}, входящих=${inbound}, ` +
-      `исходящих=${outbound}, отвечено=${answered}, пропущено=${missed} (окно ${SIPUNI_WINDOW_DAYS} дн.)`,
+      `исходящих=${outbound}, отвечено=${answered}, пропущено=${missed} (окно ${windowDays} дн.)`,
   );
 
   return {
@@ -115,7 +119,7 @@ export async function syncSipuni(
     missed,
     message:
       added > 0
-        ? `Готово: добавлено ${added} новых звонков (обработано ${rows.length} за ${SIPUNI_WINDOW_DAYS} дн.).`
-        : `Готово: новых звонков нет (обработано ${rows.length} за ${SIPUNI_WINDOW_DAYS} дн.).`,
+        ? `Готово: добавлено ${added} новых звонков (обработано ${rows.length} за ${windowDays} дн.).`
+        : `Готово: новых звонков нет (обработано ${rows.length} за ${windowDays} дн.).`,
   };
 }

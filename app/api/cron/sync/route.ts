@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runIncrementalSync } from "@/lib/integrations/amocrm-cron";
-import { syncSipuni } from "@/lib/integrations/sipuni-sync";
+import { syncSipuni, SIPUNI_WINDOW_DAYS } from "@/lib/integrations/sipuni-sync";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Hobby may cap lower; we bound work with a deadline
@@ -75,7 +75,7 @@ async function handle(request: NextRequest) {
       continue;
     }
     try {
-      const s = await syncSipuni(supabase, org);
+      const s = await syncSipuni(supabase, org, { days: SIPUNI_WINDOW_DAYS });
       sipuniResults.push({ organizationId: org, added: s.added, total: s.total });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
