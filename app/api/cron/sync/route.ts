@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runIncrementalSync } from "@/lib/integrations/amocrm-cron";
+import { syncSipuni } from "@/lib/integrations/sipuni-sync";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Hobby may cap lower; we bound work with a deadline
@@ -59,8 +60,38 @@ async function handle(request: NextRequest) {
     }
   }
 
-  console.log(`[cron sync] обработано организаций: ${results.length}`);
-  return NextResponse.json({ ok: true, count: results.length, results });
+  // ── Sipuni (telephony) — pull recent calls for connected orgs ────────────
+  const { data: sipuniRows } = await supabase
+    .from("integrations")
+    .select("organization_id")
+    .eq("provider", "sipuni")
+    .eq("status", "CONNECTED")
+    .limit(MAX_ORGS);
+  const sipuniOrgs = ((sipuniRows as any[]) ?? []).map((r) => r.organization_id as string);
+  const sipuniResults: any[] = [];
+  for (const org of sipuniOrgs) {
+    if (Date.now() >= deadline) {
+      sipuniResults.push({ organizationId: org, skipped: "deadline" });
+      continue;
+    }
+    try {
+      const s = await syncSipuni(supabase, org);
+      sipuniResults.push({ organizationId: org, added: s.added, total: s.total });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[cron sync] sipuni org=${org} error:`, message);
+      sipuniResults.push({ organizationId: org, error: message });
+    }
+  }
+
+  console.log(
+    `[cron sync] amoCRM орг: ${results.length}, Sipuni орг: ${sipuniResults.length}`,
+  );
+  return NextResponse.json({
+    ok: true,
+    amocrm: { count: results.length, results },
+    sipuni: { count: sipuniResults.length, results: sipuniResults },
+  });
 }
 
 export async function GET(request: NextRequest) {

@@ -9,11 +9,21 @@ export const SIPUNI_WINDOW_DAYS = Number(process.env.SIPUNI_WINDOW_DAYS) || 90;
 
 export interface SipuniSyncSummary {
   total: number;
+  added: number;
   inbound: number;
   outbound: number;
   answered: number;
   missed: number;
   message: string;
+}
+
+async function countCalls(supabase: SupabaseClient, org: string): Promise<number> {
+  const { count } = await supabase
+    .from("calls")
+    .select("*", { count: "exact", head: true })
+    .eq("organization_id", org)
+    .eq("source", "sipuni");
+  return count ?? 0;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -51,6 +61,7 @@ export async function syncSipuni(
   const from = new Date(to.getTime() - SIPUNI_WINDOW_DAYS * 86400000);
 
   const calls: SipuniCall[] = await client.getCalls(from, to);
+  const before = await countCalls(supabase, org);
 
   const rows = calls.map((c) => ({
     organization_id: org,
@@ -84,21 +95,27 @@ export async function syncSipuni(
     .eq("organization_id", org)
     .eq("provider", "sipuni");
 
+  const after = await countCalls(supabase, org);
+  const added = Math.max(0, after - before);
   const inbound = rows.filter((r) => r.direction === "in").length;
   const outbound = rows.filter((r) => r.direction === "out").length;
   const answered = rows.filter((r) => r.answered).length;
   const missed = rows.length - answered;
   console.log(
-    `[sipuni] sync итог: всего=${rows.length}, входящих=${inbound}, исходящих=${outbound}, ` +
-      `отвечено=${answered}, пропущено=${missed} (окно ${SIPUNI_WINDOW_DAYS} дн.)`,
+    `[sipuni] sync итог: добавлено=${added}, обработано=${rows.length}, входящих=${inbound}, ` +
+      `исходящих=${outbound}, отвечено=${answered}, пропущено=${missed} (окно ${SIPUNI_WINDOW_DAYS} дн.)`,
   );
 
   return {
     total: rows.length,
+    added,
     inbound,
     outbound,
     answered,
     missed,
-    message: `Звонков загружено: ${rows.length} (входящих ${inbound}, исходящих ${outbound}, пропущено ${missed}).`,
+    message:
+      added > 0
+        ? `Готово: добавлено ${added} новых звонков (обработано ${rows.length} за ${SIPUNI_WINDOW_DAYS} дн.).`
+        : `Готово: новых звонков нет (обработано ${rows.length} за ${SIPUNI_WINDOW_DAYS} дн.).`,
   };
 }

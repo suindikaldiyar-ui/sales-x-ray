@@ -59,7 +59,7 @@ export default async function CallsPage({
           icon={<RefreshCw className="h-5 w-5" />}
           title="Запустите синхронизацию"
           description="Загрузите статистику звонков из Sipuni."
-          action={canManage ? <SyncButton endpoint="/api/sync/sipuni" label="Синхронизировать звонки" /> : undefined}
+          action={canManage ? <SyncButton endpoint="/api/sync/sipuni" label="Синхронизировать сейчас" /> : undefined}
         />
       </>
     );
@@ -72,7 +72,7 @@ export default async function CallsPage({
         description="Статистика телефонии Sipuni за период."
         action={
           canManage ? (
-            <SyncButton size="sm" variant="outline" endpoint="/api/sync/sipuni" label="Синхронизировать" />
+            <SyncButton size="sm" variant="primary" endpoint="/api/sync/sipuni" label="Синхронизировать сейчас" />
           ) : undefined
         }
       />
