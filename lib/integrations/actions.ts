@@ -133,6 +133,52 @@ export async function setWazzupWebhookAction(
   return { message: "URL для вебхуков готов." };
 }
 
+/**
+ * Save the Sipuni extension→name manager map (OWNER/ROP). Reads pairs from the
+ * form fields `ext_i` / `name_i`; upserts non-empty pairs and deletes ones whose
+ * name was cleared.
+ */
+export async function saveSipuniManagersAction(
+  _prev: IntegrationActionState,
+  formData: FormData,
+): Promise<IntegrationActionState> {
+  const { organization } = await requireRole(["OWNER", "ROP"]);
+  const supabase = createClient();
+
+  const pairs: { extension: string; name: string }[] = [];
+  const toDelete: string[] = [];
+  for (let i = 0; i < 50; i++) {
+    const ext = String(formData.get(`ext_${i}`) ?? "").trim();
+    const name = String(formData.get(`name_${i}`) ?? "").trim();
+    if (!ext) continue;
+    if (name) pairs.push({ extension: ext, name });
+    else toDelete.push(ext);
+  }
+
+  if (pairs.length > 0) {
+    const { error } = await supabase.from("sipuni_manager_map").upsert(
+      pairs.map((p) => ({
+        organization_id: organization.id,
+        extension: p.extension,
+        name: p.name,
+      })),
+      { onConflict: "organization_id,extension" },
+    );
+    if (error) return { error: error.message };
+  }
+  if (toDelete.length > 0) {
+    await supabase
+      .from("sipuni_manager_map")
+      .delete()
+      .eq("organization_id", organization.id)
+      .in("extension", toDelete);
+  }
+
+  revalidatePath("/calls");
+  revalidatePath("/integrations");
+  return { message: "Карта менеджеров сохранена." };
+}
+
 /** Disconnect a provider: clear its config and reset status. */
 export async function disconnectIntegrationAction(formData: FormData) {
   const provider = String(formData.get("provider") ?? "") as IntegrationProvider;

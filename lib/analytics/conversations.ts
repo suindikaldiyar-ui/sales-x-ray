@@ -64,6 +64,10 @@ interface MsgRow {
 const toSec = (iso: string | null): number =>
   iso ? Math.floor(new Date(iso).getTime() / 1000) : 0;
 
+/** First-response gaps longer than this (8h) are treated as overnight/weekend
+ * outliers and excluded from the response-speed metric. */
+const RESPONSE_CAP_SEC = 8 * 3600;
+
 async function fetchAll<T>(
   supabase: SupabaseClient,
   table: string,
@@ -220,9 +224,15 @@ export async function getConversationsData(
       (to == null || a.firstInbound <= to)
     )
       newLeads += 1;
-    if (a.firstInbound != null && a.firstResponse != null) {
-      responseTimes.push(a.firstResponse - a.firstInbound);
-    }
+    // First-response time, but ignore gaps over 8h (nights/weekends) so the
+    // metric isn't dominated by non-working-hours outliers.
+    const respGap =
+      a.firstInbound != null && a.firstResponse != null
+        ? a.firstResponse - a.firstInbound
+        : null;
+    const validResp = respGap != null && respGap >= 0 && respGap <= RESPONSE_CAP_SEC ? respGap : null;
+    if (validResp != null) responseTimes.push(validResp);
+
     const isUnanswered = a.lastInbound;
     if (isUnanswered) unanswered.push(toFeedItem(c, a.lastInbound, true));
 
@@ -231,12 +241,18 @@ export async function getConversationsData(
     const m = mgrAgg.get(mid) ?? { name: mname, dialogs: 0, unanswered: 0, resp: [] };
     m.dialogs += 1;
     if (isUnanswered) m.unanswered += 1;
-    if (a.firstInbound != null && a.firstResponse != null) m.resp.push(a.firstResponse - a.firstInbound);
+    if (validResp != null) m.resp.push(validResp);
     mgrAgg.set(mid, m);
   }
 
-  const avg = (xs: number[]) =>
-    xs.length ? Math.round((xs.reduce((s, x) => s + x, 0) / xs.length / 60) * 10) / 10 : null;
+  // Median (robust to outliers), in minutes (1 decimal).
+  const median = (xs: number[]): number | null => {
+    if (!xs.length) return null;
+    const s = [...xs].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    const v = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    return Math.round((v / 60) * 10) / 10;
+  };
 
   const managers: ManagerChatStat[] = [...mgrAgg.entries()]
     .map(([id, m]) => ({
@@ -244,7 +260,7 @@ export async function getConversationsData(
       name: m.name,
       dialogs: m.dialogs,
       unanswered: m.unanswered,
-      avgFirstResponseMin: avg(m.resp),
+      avgFirstResponseMin: median(m.resp),
     }))
     .sort((a, b) => b.dialogs - a.dialogs);
 
@@ -269,7 +285,7 @@ export async function getConversationsData(
     dialogs,
     newLeads,
     unansweredCount: unanswered.length,
-    avgFirstResponseMin: avg(responseTimes),
+    avgFirstResponseMin: median(responseTimes),
     unanswered: unanswered.slice(0, 50),
     managers,
     feed,

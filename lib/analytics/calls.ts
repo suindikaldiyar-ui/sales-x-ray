@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveRange, type RangeParams } from "@/lib/period-range";
+import { getSipuniManagerMap, resolveManagerName } from "@/lib/integrations/sipuni-managers";
 
 export interface CallItem {
   id: string;
@@ -105,6 +106,10 @@ export async function getCallsData(
     return true;
   });
 
+  // Resolve Sipuni extension codes (205, "205 …") → real manager names.
+  const mgrMap = await getSipuniManagerMap(supabase, org);
+  const nameOf = (c: CallRow) => resolveManagerName(c.manager_name, mgrMap);
+
   const inbound = rows.filter((c) => c.direction === "in").length;
   const outbound = rows.filter((c) => c.direction === "out").length;
   const answered = rows.filter((c) => c.answered).length;
@@ -117,7 +122,7 @@ export async function getCallsData(
   // Per-manager breakdown.
   const mgr = new Map<string, ManagerCallStat & { _durSum: number; _durN: number }>();
   for (const c of rows) {
-    const name = c.manager_name || "Без ответственного";
+    const name = nameOf(c);
     let m = mgr.get(name);
     if (!m) {
       m = { name, total: 0, answered: 0, missed: 0, inbound: 0, outbound: 0, avgDurationSec: 0, _durSum: 0, _durN: 0 };
@@ -159,7 +164,7 @@ export async function getCallsData(
       id: c.id,
       direction: (c.direction as "in" | "out" | null) ?? null,
       clientPhone: c.client_phone,
-      managerName: c.manager_name,
+      managerName: nameOf(c),
       durationSec: c.duration_sec ?? 0,
       status: c.status,
       answered: Boolean(c.answered),

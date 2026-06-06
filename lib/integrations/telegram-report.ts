@@ -99,9 +99,26 @@ function buildMessage(
   L.push(`📊 <b>Sales X-Ray — отчёт за день</b>`);
   L.push(`🏢 ${esc(orgName)}`);
   L.push(`📅 ${esc(fmtDate(new Date()))}`);
+
+  // ── 🔴 Where sales leak (the headline diagnostic) ─────────────────────────
+  const missedPct = calls.total > 0 ? Math.round((calls.missed / calls.total) * 100) : 0;
+  const lostContacts = calls.missed + conv.unansweredCount;
   L.push("");
+  L.push(`🔴 <b>Где теряются продажи</b>`);
+  if (calls.connected) {
+    L.push(`⚠️ Пропущено звонков: <b>${calls.missed}</b> из ${calls.total} (${missedPct}%)`);
+  }
+  if (conv.synced) {
+    L.push(`⚠️ Без ответа в переписке: <b>${conv.unansweredCount}</b>`);
+    if (conv.avgFirstResponseMin != null) {
+      const slow = conv.avgFirstResponseMin >= 15;
+      L.push(`${slow ? "🐢" : "⚡️"} Медиана первого ответа: <b>${conv.avgFirstResponseMin} мин</b>`);
+    }
+  }
+  L.push(`📉 Итого упущенных обращений: <b>${lostContacts}</b>`);
 
   // ── Calls ────────────────────────────────────────────────────────────────
+  L.push("");
   if (calls.connected) {
     L.push(`📞 <b>Звонки</b>`);
     L.push(`Всего: <b>${calls.total}</b> (вх ${calls.inbound} / исх ${calls.outbound})`);
@@ -128,7 +145,7 @@ function buildMessage(
     L.push(`Новых лидов: <b>${conv.newLeads}</b>`);
     L.push(`⚠️ Не отвечено: <b>${conv.unansweredCount}</b>`);
     L.push(
-      `⏱ Ср. ответ: ${conv.avgFirstResponseMin != null ? conv.avgFirstResponseMin + " мин" : "—"}`,
+      `⏱ Медиана первого ответа: ${conv.avgFirstResponseMin != null ? conv.avgFirstResponseMin + " мин" : "—"}`,
     );
   } else {
     L.push(`💬 <b>Переписка</b>: Wazzup не подключён`);
