@@ -27,6 +27,8 @@ export interface GeminiCallOptions {
   json?: boolean;
   temperature?: number;
   label?: string;
+  /** Inline media (e.g. a voice message) sent alongside the prompt. */
+  audio?: { data: string; mimeType: string };
 }
 
 interface ListedModel {
@@ -74,8 +76,13 @@ function pickModel(models: ListedModel[], preferred: string): string | null {
 }
 
 function buildBody(opts: GeminiCallOptions): Record<string, unknown> {
+  const parts: unknown[] = [];
+  if (opts.audio) {
+    parts.push({ inline_data: { mime_type: opts.audio.mimeType, data: opts.audio.data } });
+  }
+  parts.push({ text: opts.prompt });
   const body: Record<string, unknown> = {
-    contents: [{ role: "user", parts: [{ text: opts.prompt }] }],
+    contents: [{ role: "user", parts }],
     generationConfig: {
       temperature: opts.temperature ?? 0.3,
       ...(opts.json ? { responseMimeType: "application/json" } : {}),

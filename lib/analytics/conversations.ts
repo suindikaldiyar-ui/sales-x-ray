@@ -282,6 +282,8 @@ export interface ThreadMessage {
   authorName: string | null;
   body: string | null;
   type: string | null;
+  mediaUrl: string | null;
+  transcript: string | null;
   sentAt: string | null;
 }
 export interface ConversationThread {
@@ -307,7 +309,7 @@ export async function getConversationThread(
 
   const { data: msgs } = await supabase
     .from("messages")
-    .select("id, direction, author_name, body, message_type, sent_at")
+    .select("id, direction, author_name, body, message_type, media_url, transcript, sent_at")
     .eq("organization_id", org)
     .eq("conversation_id", conversationId)
     .order("sent_at", { ascending: true })
@@ -323,6 +325,8 @@ export async function getConversationThread(
       authorName: m.author_name,
       body: m.body,
       type: m.message_type,
+      mediaUrl: m.media_url,
+      transcript: m.transcript,
       sentAt: m.sent_at,
     })),
   };

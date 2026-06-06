@@ -98,9 +98,16 @@ export async function POST(
     const sentAt = m.dateTime ? new Date(m.dateTime).toISOString() : new Date().toISOString();
     const contactName: string | null = m.contact?.name ?? null;
     const contactHandle = m.contact?.phone ?? m.contact?.username ?? chatId;
-    // Text lives in `text` (try a couple of fallbacks just in case).
-    const textBody: string | null = m.text ?? m.content ?? m.body ?? null;
     const msgType: string | null = m.type ?? null;
+    const isText = !msgType || msgType.toLowerCase() === "text";
+    // Text lives in `text` (try a couple of fallbacks just in case).
+    const textBody: string | null = isText ? (m.text ?? m.content ?? m.body ?? null) : (m.text ?? null);
+    // Media link (photo/audio/etc.) — Wazzup commonly uses `contentUri`.
+    const mediaUrl: string | null =
+      m.contentUri ??
+      m.mediaUrl ??
+      m.url ??
+      (typeof m.content === "string" && /^https?:\/\//.test(m.content) ? m.content : null);
 
     // Log the direction + type + text fields so the mapping can be verified.
     console.log(
@@ -109,6 +116,14 @@ export async function POST(
         `contact=${m.contact?.name} text="${(textBody ?? "").slice(0, 60)}" ` +
         `-> dir=${inbound ? "in" : "out"}`,
     );
+    // For non-text messages, dump ALL fields so we can pinpoint the media link.
+    if (!isText) {
+      console.log(
+        `[wazzup webhook] media type=${msgType} contentUri=${m.contentUri} ` +
+          `mediaUrl=${m.mediaUrl} url=${m.url} content=${typeof m.content === "string" ? m.content : typeof m.content} ` +
+          `resolved=${mediaUrl} keys=[${Object.keys(m).join(",")}]`,
+      );
+    }
 
     // Build the conversation patch — don't overwrite a known contact name with
     // null (outbound messages may omit the contact).
@@ -147,6 +162,7 @@ export async function POST(
         author: authorName,
         author_name: authorName,
         body: textBody,
+        media_url: mediaUrl,
         status: m.status ?? null,
         message_type: msgType,
         sent_at: sentAt,

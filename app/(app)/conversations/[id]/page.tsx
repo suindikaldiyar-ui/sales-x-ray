@@ -11,7 +11,11 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { messagePreview, isAttachment } from "@/lib/messages";
+import { VoiceTranscribe } from "@/components/ai/voice-transcribe";
 import { cn } from "@/lib/utils";
+
+const IMAGE_TYPES = ["image", "picture"];
+const VOICE_TYPES = ["voice", "audio", "ptt"];
 
 export const metadata = { title: "Диалог — Sales X-Ray" };
 
@@ -99,14 +103,51 @@ export default async function ConversationViewPage({
                   {!m.inbound && m.authorName && (
                     <p className="mb-0.5 text-xs font-medium text-xray">{m.authorName}</p>
                   )}
-                  <p
-                    className={cn(
-                      "whitespace-pre-wrap break-words",
-                      isAttachment(m.body, m.type) && "italic text-content-muted",
-                    )}
-                  >
-                    {messagePreview(m.body, m.type)}
-                  </p>
+
+                  {(() => {
+                    const t = (m.type ?? "").toLowerCase();
+                    // Photo → show the image (click to open full size).
+                    if (IMAGE_TYPES.includes(t) && m.mediaUrl) {
+                      return (
+                        <>
+                          <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="block">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={m.mediaUrl}
+                              alt="Фото"
+                              className="max-h-64 max-w-full rounded-lg border border-line object-cover"
+                            />
+                          </a>
+                          {m.body && <p className="mt-1 whitespace-pre-wrap break-words">{m.body}</p>}
+                        </>
+                      );
+                    }
+                    // Voice / audio → player + transcribe.
+                    if (VOICE_TYPES.includes(t)) {
+                      return (
+                        <div>
+                          <p className="italic text-content-muted">🎤 Голосовое</p>
+                          {m.mediaUrl && (
+                            // eslint-disable-next-line jsx-a11y/media-has-caption
+                            <audio controls src={m.mediaUrl} className="mt-1.5 h-9 w-full max-w-[16rem]" />
+                          )}
+                          <VoiceTranscribe messageId={m.id} initial={m.transcript} aiReady={ai.ready} />
+                        </div>
+                      );
+                    }
+                    // Everything else → text or a typed chip.
+                    return (
+                      <p
+                        className={cn(
+                          "whitespace-pre-wrap break-words",
+                          isAttachment(m.body, m.type) && "italic text-content-muted",
+                        )}
+                      >
+                        {messagePreview(m.body, m.type)}
+                      </p>
+                    );
+                  })()}
+
                   <p className="mt-1 text-right text-[10px] text-content-faint">
                     {fmtTime(m.sentAt)}
                   </p>
