@@ -81,6 +81,8 @@ export async function syncSipuni(
     duration_sec: c.durationSec,
     status: c.status,
     answered: c.answered,
+    record_id: c.recordId,
+    has_record: c.hasRecord,
     record_url: c.recordId,
     started_at: c.startedAt,
     raw: c.raw,

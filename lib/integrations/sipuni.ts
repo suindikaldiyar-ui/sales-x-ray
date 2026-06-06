@@ -55,6 +55,7 @@ export interface SipuniCall {
   status: string | null;
   answered: boolean;
   recordId: string | null;
+  hasRecord: boolean;
   startedAt: string | null; // ISO
   raw: Record<string, string>;
 }
@@ -169,18 +170,23 @@ interface ColIdx {
   from: number;
   to: number;
   manager: number;
+  managerCrm: number;
   talk: number;
   dur: number;
   record: number;
+  hasRecord: number;
   id: number;
 }
 
-// Positional layout of the Sipuni export (no header), per the real sample:
-//   Входящий;Отвечен;06.06.2026 13:50:45;Входящая;+7701…;+7700…;205;15;9;6;…
-//   0 тип   1 статус 2 время            3 схема   4 откуда 5 куда 6 менеджер
-//   7 время дозвона  8 длительность разговора  9 оценка …
+// Full Sipuni export layout (header is fixed):
+//   0 Тип 1 Статус 2 Время 3 Схема 4 Откуда 5 Куда 6 Кто ответил
+//   7 Длит.звонка 8 Длит.разговора 9 Время ответа 10 Оценка 11 ID записи
+//   12 Метка 13 Теги 14 ID заказа звонка 15 Запись существует 16 Новый клиент
+//   17 Состояние перезвона 18 Время перезвона 19 Информация из CRM
+//   20 Ответственный из CRM
 const POSITIONAL: ColIdx = {
-  type: 0, status: 1, time: 2, from: 4, to: 5, manager: 6, talk: 8, dur: 7, record: -1, id: -1,
+  type: 0, status: 1, time: 2, from: 4, to: 5, manager: 6, managerCrm: 20,
+  talk: 8, dur: 7, record: 11, hasRecord: 15, id: 14,
 };
 
 function looksLikeHeader(firstLower: string[]): boolean {
@@ -205,20 +211,32 @@ export function parseCallsCsv(csv: string): SipuniCall[] {
 
   let idx: ColIdx;
   if (hasHeader) {
-    const find = (...needles: string[]) =>
-      firstLower.findIndex((h) => needles.some((n) => h.includes(n)));
+    // Exact-name first (avoids traps like "откуда".includes("куда")), then a
+    // safe substring fallback, else the known positional index.
     const exact = (name: string) => firstLower.findIndex((h) => h === name);
+    const has = (needle: string) => firstLower.findIndex((h) => h.includes(needle));
+    const pick = (fallback: number, exactName: string, contains?: string) => {
+      const e = exact(exactName);
+      if (e >= 0) return e;
+      if (contains) {
+        const c = has(contains);
+        if (c >= 0) return c;
+      }
+      return fallback;
+    };
     idx = {
-      type: find("тип"),
-      status: find("статус"),
-      time: exact("время") >= 0 ? exact("время") : find("время"),
-      from: find("откуда", "from"),
-      to: find("куда", "to"),
-      manager: find("кто ответил", "ответил", "оператор", "сотрудник", "менеджер", "внутренний"),
-      talk: find("длительность разговора", "разговор"),
-      dur: find("длительность звонка", "дозвон", "длительность"),
-      record: find("запись", "record"),
-      id: exact("id") >= 0 ? exact("id") : find("идентификатор"),
+      type: pick(0, "тип"),
+      status: pick(1, "статус"),
+      time: pick(2, "время"),
+      from: pick(4, "откуда"),
+      to: pick(5, "куда"),
+      manager: pick(6, "кто ответил", "кто ответил"),
+      managerCrm: pick(20, "ответственный из crm", "ответственный"),
+      talk: pick(8, "длительность разговора, сек", "длительность разговора"),
+      dur: pick(7, "длительность звонка, сек", "длительность звонка"),
+      record: pick(11, "id записи", "id записи"),
+      hasRecord: pick(15, "запись существует", "запись существует"),
+      id: pick(14, "id заказа звонка", "id заказа"),
     };
   } else {
     idx = POSITIONAL;
@@ -235,6 +253,7 @@ export function parseCallsCsv(csv: string): SipuniCall[] {
   const at = (cols: string[], i: number) => (i >= 0 && i < cols.length ? cols[i].trim() : "");
 
   const out: SipuniCall[] = [];
+  const statusValues = new Set<string>();
   for (let r = dataStart; r < lines.length; r++) {
     const cols = splitCsvLine(lines[r]);
     if (cols.length < 3) continue;
@@ -247,6 +266,7 @@ export function parseCallsCsv(csv: string): SipuniCall[] {
         : null;
 
     const statusRaw = at(cols, idx.status);
+    if (statusRaw) statusValues.add(statusRaw);
     const sl = statusRaw.toLowerCase();
     const talkSec = parseDuration(at(cols, idx.talk) || at(cols, idx.dur));
     const missed = isMissed(sl);
@@ -258,10 +278,20 @@ export function parseCallsCsv(csv: string): SipuniCall[] {
     const toNumber = at(cols, idx.to) || null;
     const clientPhone = direction === "out" ? toNumber : fromNumber;
     const startedAt = parseSipuniDate(at(cols, idx.time));
-    const manager = at(cols, idx.manager) || null;
-    const recordId = at(cols, idx.record) || null;
+
+    // Manager: "Кто ответил" → else "Ответственный из CRM" → else null.
+    const answeredBy = at(cols, idx.manager);
+    const crmResponsible = at(cols, idx.managerCrm);
+    const manager = answeredBy || crmResponsible || null;
+
+    const recordIdRaw = at(cols, idx.record);
+    const recordId = recordIdRaw && recordIdRaw !== "0" ? recordIdRaw : null;
+    const hasRecordRaw = at(cols, idx.hasRecord).toLowerCase();
+    const hasRecord = /^(1|да|true|yes|есть)$/.test(hasRecordRaw) || Boolean(recordId);
+
+    const orderId = at(cols, idx.id);
     const externalId =
-      at(cols, idx.id) ||
+      orderId ||
       md5(`${at(cols, idx.time)}|${fromNumber ?? ""}|${toNumber ?? ""}|${manager ?? ""}|${typeRaw}|${talkSec}`);
 
     const raw: Record<string, string> = {};
@@ -279,14 +309,17 @@ export function parseCallsCsv(csv: string): SipuniCall[] {
       durationSec: talkSec,
       status: statusRaw || null,
       answered,
-      recordId: recordId && recordId !== "0" ? recordId : null,
+      recordId,
+      hasRecord,
       startedAt,
       raw,
     });
   }
   console.log(
-    `[sipuni] parsed ${out.length} calls (answered=${out.filter((c) => c.answered).length}, missed=${out.filter((c) => !c.answered).length})`,
+    `[sipuni] parsed ${out.length} calls (answered=${out.filter((c) => c.answered).length}, ` +
+      `missed=${out.filter((c) => !c.answered).length})`,
   );
+  console.log(`[sipuni] уникальные статусы: ${[...statusValues].join(" | ")}`);
   return out;
 }
 
