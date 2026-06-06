@@ -39,12 +39,15 @@ export async function transcribeMessage(
   try {
     res = await fetch(url, { cache: "no-store" });
   } catch (e) {
-    console.error("[gemini transcribe] download network error:", e);
+    console.error(`[gemini transcribe] download ${url} -> network error:`, e);
     throw new Error("Не удалось скачать аудио по ссылке.");
   }
-  console.log(`[gemini transcribe] download ${url.slice(0, 80)} -> ${res.status} ${res.headers.get("content-type")}`);
+  console.log(
+    `[gemini transcribe] download ${url} -> ${res.status} ` +
+      `content-type=${res.headers.get("content-type")} length=${res.headers.get("content-length")}`,
+  );
   if (res.status === 401 || res.status === 403) {
-    throw new Error("Ссылка на аудио требует авторизации (401/403) — Gemini не сможет её скачать.");
+    throw new Error("Ссылка на аудио требует авторизации (401/403) — скачать не удалось.");
   }
   if (!res.ok) {
     throw new Error(`Не удалось получить аудио (${res.status}).`);
