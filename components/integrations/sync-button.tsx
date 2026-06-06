@@ -11,7 +11,7 @@ interface BatchResponse {
   resumable?: boolean;
   error?: string;
   done?: boolean;
-  phase?: "pipelines" | "leads" | "events" | "done";
+  phase?: "pipelines" | "leads" | "events" | "contacts" | "done";
   progress?: number;
   leadsSynced?: number;
   eventsProcessed?: number;
@@ -23,6 +23,7 @@ const PHASE_LABEL: Record<string, string> = {
   pipelines: "Загрузка воронок…",
   leads: "Загрузка сделок…",
   events: "Анализ истории переходов…",
+  contacts: "Загрузка контактов…",
   done: "Готово",
 };
 

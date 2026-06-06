@@ -10,7 +10,6 @@ import { IntegrationForm } from "./integration-form";
 import { SyncButton } from "./sync-button";
 import { TestConnectionButton } from "./test-connection-button";
 import { WazzupWebhook } from "./wazzup-webhook";
-import { SipuniManagerMap } from "./sipuni-manager-map";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<IntegrationStatus, string> = {
@@ -37,8 +36,6 @@ export function IntegrationCard({
   lastAutoSyncedAt = null,
   webhookOrgId,
   webhookSecret = null,
-  sipuniManagers,
-  sipuniUnmapped = [],
 }: {
   entry: ProviderCatalogEntry;
   status: IntegrationStatus;
@@ -47,8 +44,6 @@ export function IntegrationCard({
   lastAutoSyncedAt?: string | null;
   webhookOrgId?: string;
   webhookSecret?: string | null;
-  sipuniManagers?: { extension: string; name: string }[];
-  sipuniUnmapped?: string[];
 }) {
   const connected = status === "CONNECTED";
   const [open, setOpen] = useState(!connected);
@@ -136,11 +131,6 @@ export function IntegrationCard({
           {isWazzup && webhookOrgId && (
             <div className="px-5 pb-4">
               <WazzupWebhook orgId={webhookOrgId} secret={webhookSecret} />
-            </div>
-          )}
-          {isSipuni && sipuniManagers && (
-            <div className="px-5 pb-4">
-              <SipuniManagerMap existing={sipuniManagers} unmapped={sipuniUnmapped} />
             </div>
           )}
         </>

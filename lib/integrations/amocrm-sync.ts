@@ -7,6 +7,7 @@ import {
   type AmoCrmConfig,
   type AmoLead,
 } from "./amocrm";
+import { upsertContactPhones } from "./amocrm-phones";
 
 // ── window config ──────────────────────────────────────────────────────────
 /** Default sync window (days). Override with SYNC_WINDOW_DAYS; full = 365. */
@@ -19,6 +20,7 @@ export const FULL_WINDOW_DAYS = 365;
 const PAGE_CONCURRENCY = 3; // pages per wave (pacing is global in the client)
 const LEAD_BATCH_PAGES = 4; // ≈ 1 000 leads per request
 const EVENT_BATCH_PAGES = 8; // ≈ 800 events per request
+const CONTACT_BATCH_PAGES = 6; // ≈ 1 500 contacts per request (phones index)
 const SOFT_DEADLINE_MS = 22_000; // stop before a new wave once this is reached
 
 /** Thrown for unrecoverable config problems (→ HTTP 400, not resumable). */
@@ -26,7 +28,7 @@ export class SyncConfigError extends Error {}
 
 export interface SyncProgress {
   status: "running" | "done" | "error";
-  phase: "pipelines" | "leads" | "events" | "done";
+  phase: "pipelines" | "leads" | "events" | "contacts" | "done";
   done: boolean;
   progress: number; // 0..1 (soft estimate)
   leadsSynced: number;
@@ -410,7 +412,8 @@ async function processEventsBatch(
     pagesDone += pages.length;
     const hitLast = results.some((r) => r.isLast);
     if (hitLast) {
-      state.phase = "done";
+      state.phase = "contacts";
+      state.cursor_page = 1;
     } else {
       state.cursor_page += pages.length;
     }
@@ -425,6 +428,41 @@ async function processEventsBatch(
       `[sync amocrm] phase=events page=${state.cursor_page} events=${state.events_processed} deadline-hit=false`,
     );
 
+    if (state.phase === "contacts") break;
+  }
+}
+
+/** Contacts phase — page contacts, index their phones → responsible manager. */
+async function processContactsBatch(
+  supabase: SupabaseClient,
+  org: string,
+  client: AmoApiClient,
+  state: SyncStateRow,
+  deadline: number,
+): Promise<void> {
+  let pagesDone = 0;
+
+  while (pagesDone < CONTACT_BATCH_PAGES) {
+    if (Date.now() >= deadline) {
+      console.log(`[sync amocrm] phase=contacts page=${state.cursor_page} deadline-hit=true`);
+      return;
+    }
+    const waveSize = Math.min(PAGE_CONCURRENCY, CONTACT_BATCH_PAGES - pagesDone);
+    const pages = Array.from({ length: waveSize }, (_, i) => state.cursor_page + i);
+    const results = await Promise.all(pages.map((p) => client.getContactsPage(p)));
+
+    const contacts = results.flatMap((r) => r.contacts);
+    if (contacts.length > 0) await upsertContactPhones(supabase, org, contacts);
+
+    pagesDone += pages.length;
+    const hitLast = results.some((r) => r.isLast);
+    if (hitLast) state.phase = "done";
+    else state.cursor_page += pages.length;
+
+    await saveState(supabase, org, { phase: state.phase, cursor_page: state.cursor_page });
+    console.log(
+      `[sync amocrm] phase=contacts page=${state.cursor_page} deadline-hit=false`,
+    );
     if (state.phase === "done") break;
   }
 }
@@ -497,7 +535,8 @@ function computeProgress(state: SyncStateRow): number {
   if (state.phase === "leads")
     return Math.min(0.55, 0.08 + state.leads_synced / (state.leads_synced + 8000));
   if (state.phase === "events")
-    return 0.55 + 0.44 * (state.events_processed / (state.events_processed + 15000));
+    return 0.5 + 0.35 * (state.events_processed / (state.events_processed + 15000));
+  if (state.phase === "contacts") return 0.9;
   return 0.04;
 }
 
@@ -567,6 +606,9 @@ export async function runSyncBatch(
   }
   if (state.phase === "events") {
     await processEventsBatch(supabase, org, client, state, catalog, deadline);
+  }
+  if (state.phase === "contacts") {
+    await processContactsBatch(supabase, org, client, state, deadline);
   }
 
   const finished = state.phase === "done";

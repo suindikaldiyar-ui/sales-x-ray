@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveRange, type RangeParams } from "@/lib/period-range";
-import { getSipuniManagerMap, resolveManagerName } from "@/lib/integrations/sipuni-managers";
+import { normalizePhone } from "@/lib/integrations/amocrm-phones";
 
 export interface CallItem {
   id: string;
@@ -106,9 +106,35 @@ export async function getCallsData(
     return true;
   });
 
-  // Resolve Sipuni extension codes (205, "205 …") → real manager names.
-  const mgrMap = await getSipuniManagerMap(supabase, org);
-  const nameOf = (c: CallRow) => resolveManagerName(c.manager_name, mgrMap);
+  // Resolve manager from amoCRM: client phone → responsible user → name.
+  const phonesNeeded = [
+    ...new Set(rows.map((c) => normalizePhone(c.client_phone)).filter(Boolean)),
+  ] as string[];
+  const phoneToResp = new Map<string, number>();
+  for (let i = 0; i < phonesNeeded.length; i += 200) {
+    const slice = phonesNeeded.slice(i, i + 200);
+    const { data } = await supabase
+      .from("amocrm_phones")
+      .select("phone_norm, responsible_user_id")
+      .eq("organization_id", org)
+      .in("phone_norm", slice);
+    for (const r of (data as any[]) ?? []) {
+      if (r.responsible_user_id != null) phoneToResp.set(r.phone_norm, r.responsible_user_id);
+    }
+  }
+  const { data: us } = await supabase
+    .from("amocrm_users")
+    .select("external_id, name")
+    .eq("organization_id", org);
+  const userName = new Map<string, string>(
+    ((us as any[]) ?? []).map((u) => [String(u.external_id), u.name]),
+  );
+  const nameOf = (c: CallRow): string => {
+    const n = normalizePhone(c.client_phone);
+    const resp = n ? phoneToResp.get(n) : undefined;
+    if (resp == null) return "Без ответственного";
+    return userName.get(String(resp)) ?? `ID ${resp}`;
+  };
 
   const inbound = rows.filter((c) => c.direction === "in").length;
   const outbound = rows.filter((c) => c.direction === "out").length;

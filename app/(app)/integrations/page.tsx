@@ -1,11 +1,5 @@
 import { requireRole } from "@/lib/tenant";
-import { createClient } from "@/lib/supabase/server";
 import { getIntegrations } from "@/lib/integrations/queries";
-import {
-  getSipuniManagers,
-  getSipuniManagerMap,
-  getUnmappedManagerCodes,
-} from "@/lib/integrations/sipuni-managers";
 import { INTEGRATION_CATALOG } from "@/lib/integrations/catalog";
 import { PageHeader } from "@/components/app/page-header";
 import { Alert } from "@/components/ui/alert";
@@ -17,16 +11,6 @@ export const metadata = { title: "Интеграции — Sales X-Ray" };
 export default async function IntegrationsPage() {
   const tenant = await requireRole(["OWNER", "ROP"]);
   const integrations = await getIntegrations(tenant.organization.id);
-
-  // Sipuni manager map (extension → name) for the editor on the Sipuni card.
-  const supabase = createClient();
-  const sipuniManagers = await getSipuniManagers(supabase, tenant.organization.id);
-  const sipuniMap = await getSipuniManagerMap(supabase, tenant.organization.id);
-  const sipuniUnmapped = await getUnmappedManagerCodes(
-    supabase,
-    tenant.organization.id,
-    sipuniMap,
-  );
 
   const byProvider = new Map<string, Integration>(
     integrations.map((i) => [i.provider, i]),
@@ -67,8 +51,6 @@ export default async function IntegrationsPage() {
                   ? ((config.webhook_secret as string | undefined) ?? null)
                   : null
               }
-              sipuniManagers={entry.provider === "sipuni" ? sipuniManagers : undefined}
-              sipuniUnmapped={entry.provider === "sipuni" ? sipuniUnmapped : undefined}
             />
           );
         })}

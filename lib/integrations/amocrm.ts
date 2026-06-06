@@ -86,6 +86,14 @@ interface AmoUserRaw {
   name: string;
   email?: string;
 }
+interface AmoContactRaw {
+  id: number;
+  responsible_user_id?: number;
+  custom_fields_values?: {
+    field_code?: string;
+    values?: { value?: string }[];
+  }[];
+}
 
 // ── normalized shapes returned to the sync layer ──────────────────────────
 export interface AmoStage {
@@ -108,6 +116,11 @@ export interface AmoUser {
   id: number;
   name: string;
   email: string | null;
+}
+export interface AmoContact {
+  id: number;
+  responsibleUserId: number | null;
+  phones: string[];
 }
 export interface AmoLead {
   id: number;
@@ -231,6 +244,34 @@ export class AmoApiClient {
         }))
         .sort((a, b) => a.sort - b.sort),
     }));
+  }
+
+  /**
+   * One page of contacts with their phones + responsible manager. Phones come
+   * from custom_fields_values (field_code "PHONE"). `updatedFrom` (unix sec)
+   * limits to recently changed contacts (used by the incremental cron).
+   */
+  async getContactsPage(
+    page: number,
+    opts: { updatedFrom?: number } = {},
+  ): Promise<{ contacts: AmoContact[]; isLast: boolean }> {
+    const qs = new URLSearchParams();
+    qs.set("limit", "250");
+    qs.set("page", String(page));
+    if (opts.updatedFrom) qs.set("filter[updated_at][from]", String(opts.updatedFrom));
+    const data = await this.request<{ _embedded?: { contacts?: AmoContactRaw[] } }>(
+      `/api/v4/contacts?${qs.toString()}`,
+    );
+    const arr = data._embedded?.contacts ?? [];
+    const contacts: AmoContact[] = arr.map((c) => ({
+      id: c.id,
+      responsibleUserId: c.responsible_user_id ?? null,
+      phones: (c.custom_fields_values ?? [])
+        .filter((f) => (f.field_code ?? "").toUpperCase() === "PHONE")
+        .flatMap((f) => (f.values ?? []).map((v) => String(v.value ?? "")))
+        .filter(Boolean),
+    }));
+    return { contacts, isLast: arr.length < 250 };
   }
 
   /** Full amoCRM user directory (managers), paged. */

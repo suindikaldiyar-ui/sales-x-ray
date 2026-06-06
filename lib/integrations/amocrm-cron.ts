@@ -1,9 +1,11 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAmoApiClient, type AmoCrmConfig, type AmoLead } from "./amocrm";
+import { upsertContactPhones } from "./amocrm-phones";
 
 // Incremental top-up tuning (cron runs are short — Hobby caps ~10s).
 const MAX_PAGES_PER_PIPELINE = 4; // ≈1000 changed leads / pipeline / run
+const MAX_CONTACT_PAGES = 6; // ≈1500 changed contacts / run (phone index)
 const OVERLAP_SEC = 3600; // re-pull a 1h overlap to avoid gaps
 const FALLBACK_DAYS = 2; // first-ever auto run window
 
@@ -169,6 +171,15 @@ export async function runIncrementalSync(
     }
   }
 
+  // ── changed contacts → phone→responsible index (bounded) ─────────────────
+  let phoneCount = 0;
+  for (let page = 1; page <= MAX_CONTACT_PAGES; page++) {
+    if (Date.now() >= deadline) break;
+    const { contacts, isLast } = await client.getContactsPage(page, { updatedFrom });
+    if (contacts.length > 0) phoneCount += await upsertContactPhones(supabase, org, contacts);
+    if (isLast) break;
+  }
+
   const nowIso = new Date().toISOString();
   await supabase
     .from("integrations")
@@ -176,6 +187,8 @@ export async function runIncrementalSync(
     .eq("organization_id", org)
     .eq("provider", "amocrm");
 
-  console.log(`[cron sync] org=${org}: воронок=${pipelines.length}, обновлено сделок=${leadCount}`);
+  console.log(
+    `[cron sync] org=${org}: воронок=${pipelines.length}, обновлено сделок=${leadCount}, телефонов=${phoneCount}`,
+  );
   return { organizationId: org, leads: leadCount, pipelines: pipelines.length };
 }
