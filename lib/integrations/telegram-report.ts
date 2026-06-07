@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCallsData, fmtDuration } from "@/lib/analytics/calls";
 import { getConversationsData } from "@/lib/analytics/conversations";
 import { fmtDate, fmtTime } from "@/lib/datetime";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface TelegramReportResult {
   sent: boolean;
@@ -15,7 +16,29 @@ interface TelegramConfig {
   chatId: string;
 }
 
-/** Resolve Telegram creds: per-org integration first, then global env. */
+/** True only when the whole system has a single organization (counted with the
+ * service-role client so it doesn't depend on the caller's RLS scope). On any
+ * error we return false — i.e. we DON'T allow the shared env fallback, the safe
+ * default for a multi-tenant system. */
+async function isSingleOrgSystem(): Promise<boolean> {
+  try {
+    const { count, error } = await createAdminClient()
+      .from("organizations")
+      .select("*", { count: "exact", head: true });
+    if (error) return false;
+    return (count ?? 0) <= 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve Telegram creds for an org. A per-org config (bot_token + chat_id in
+ * integrations.telegram.config) is ALWAYS used when present. The shared global
+ * env chat (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) is used ONLY as a fallback
+ * when the system has exactly one organization — otherwise one org's report
+ * could land in another org's chat. Multi-tenant systems must set per-org creds.
+ */
 async function resolveTelegram(
   supabase: SupabaseClient,
   org: string,
@@ -27,10 +50,18 @@ async function resolveTelegram(
     .eq("provider", "telegram")
     .maybeSingle();
   const cfg = (data?.config ?? {}) as { bot_token?: string; chat_id?: string };
-  const token = cfg.bot_token || process.env.TELEGRAM_BOT_TOKEN || "";
-  const chatId = cfg.chat_id || process.env.TELEGRAM_CHAT_ID || "";
-  if (!token || !chatId) return null;
-  return { token, chatId };
+  if (cfg.bot_token && cfg.chat_id) {
+    return { token: cfg.bot_token, chatId: cfg.chat_id };
+  }
+
+  // No per-org config: only fall back to the shared env chat for a single-org
+  // system, never when multiple organizations exist.
+  const envToken = process.env.TELEGRAM_BOT_TOKEN || "";
+  const envChat = process.env.TELEGRAM_CHAT_ID || "";
+  if (envToken && envChat && (await isSingleOrgSystem())) {
+    return { token: envToken, chatId: envChat };
+  }
+  return null;
 }
 
 function esc(s: string | null | undefined): string {
@@ -47,7 +78,10 @@ export async function sendTelegramReport(
   org: string,
 ): Promise<TelegramReportResult> {
   const tg = await resolveTelegram(supabase, org);
-  if (!tg) return { sent: false, reason: "no telegram config" };
+  if (!tg) {
+    console.log(`[telegram report] org=${org} пропущен: не задан per-org telegram`);
+    return { sent: false, reason: "не задан per-org telegram" };
+  }
 
   try {
     const { data: orgRow } = await supabase
