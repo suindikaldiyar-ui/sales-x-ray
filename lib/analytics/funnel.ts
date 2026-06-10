@@ -137,6 +137,46 @@ function pickThroughputStage(funnel: StageMetric[]): StageMetric | null {
   return deepest;
 }
 
+// Priority-ordered keywords that identify a real "sale" stage by NAME. Earlier
+// entries win, so e.g. Dubai resolves to «Келді» (arrival) rather than its
+// barely-used «Предоплата» — specific stages rank above generic «оплата», and
+// «келді» above «предоплата»/«оплата». Matched on normalized names — no IDs and
+// no per-org code, so new orgs are covered automatically.
+const SALE_STAGE_KEYWORDS = [
+  "запись подтверждена",
+  "полная оплата",
+  "бронь",
+  "келді",
+  "предоплата",
+  "оплата",
+];
+
+// Stages that are never the "sale" stage: the entry stage (rank 1) and obvious
+// service / early stages (WhatsApp lead intake, "на заказ").
+const NON_SALE_KEYWORDS = ["whatsapp", "ватсап", "вотсап", "лид", "на заказ"];
+
+function isExcludedFromSale(stage: StageMetric): boolean {
+  if (stage.rank <= 1) return true;
+  const n = normalizeStageName(stage.name);
+  return NON_SALE_KEYWORDS.some((k) => n.includes(normalizeStageName(k)));
+}
+
+/** The org's real "sale" stage for the throughput card: the deepest open stage
+ * whose name matches a sale keyword (in priority order), excluding entry/service
+ * stages. Returns null when nothing matches — caller falls back to the generic
+ * deepest-significant stage. Matched by name only (no rank/ID hard-coding). */
+function pickSaleStage(funnel: StageMetric[]): StageMetric | null {
+  const eligible = funnel.filter((s) => !isExcludedFromSale(s));
+  for (const kw of SALE_STAGE_KEYWORDS) {
+    const key = normalizeStageName(kw);
+    const matches = eligible.filter((s) => normalizeStageName(s.name).includes(key));
+    if (matches.length > 0) {
+      return matches.reduce((deepest, s) => (s.rank > deepest.rank ? s : deepest));
+    }
+  }
+  return null;
+}
+
 /** Derive whether won/lost are really used, plus the throughput fallback
  * (deepest *significant* open stage). Shared by both report builders. `funnel`
  * must be sorted by rank ascending. */
@@ -151,7 +191,9 @@ function deriveOutcomeModes(
   const usesLost =
     totalLeads > 0 && lostCount >= CLOSED_MIN_COUNT && lostCount / totalLeads >= CLOSED_MIN_SHARE;
 
-  const stage = pickThroughputStage(funnel);
+  // Prefer the org's real sale stage (by name); fall back to the generic
+  // deepest-significant stage when no sale keyword matches.
+  const stage = pickSaleStage(funnel) ?? pickThroughputStage(funnel);
   const throughput: FunnelThroughput | null =
     stage && totalLeads > 0
       ? {
