@@ -77,13 +77,34 @@ export class SipuniApiClient {
       console.error(`[sipuni] POST ${safe} -> network error`, e);
       throw new Error("Не удалось связаться с Sipuni (сеть).");
     }
+    const ct = res.headers.get("content-type") || "";
     const body = await res.text().catch(() => "");
-    console.log(`[sipuni] POST ${safe} -> ${res.status} ${body.slice(0, 600)}`);
+    // Diagnostic: status + content-type + a short, single-line, secret-free
+    // slice of the body. This is what reveals WHY Sipuni rejected the request
+    // (e.g. an HTML error page saying "Неправильный хеш").
+    console.log(
+      `[sipuni] POST ${safe} -> ${res.status} ct=${ct} ${body.slice(0, 200).replace(/\s+/g, " ").trim()}`,
+    );
+
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Sipuni 401/403: неверный API-ключ или user ID.");
+      throw new Error("Sipuni отклонил доступ (401/403): проверьте user_id и API-ключ Sipuni.");
     }
-    if (res.status > 204) {
-      throw new Error(`Sipuni ${res.status}: ${body.slice(0, 200)}`);
+
+    // Sipuni signals a bad signature with an HTML error page (usually HTTP 500)
+    // that contains "Неправильный хеш". Detect it by body shape, NOT by
+    // content-type, so a valid CSV is never mis-flagged.
+    const looksHtml = /^\s*<(?:!doctype|html)/i.test(body);
+    if (/неправильн\w*\s*хеш/i.test(body)) {
+      throw new Error(
+        "Sipuni отклонил подпись запроса («Неправильный хеш»). Проверьте user_id и API-ключ " +
+          "Sipuni — ключ должен быть скопирован полностью, без пробелов и обрезаний.",
+      );
+    }
+    if (res.status > 204 || looksHtml) {
+      throw new Error(
+        `Sipuni вернул ошибку (код ${res.status}). Проверьте правильность ключей Sipuni ` +
+          "(user_id, API-ключ) и доступ к API в кабинете Sipuni.",
+      );
     }
     return body;
   }
