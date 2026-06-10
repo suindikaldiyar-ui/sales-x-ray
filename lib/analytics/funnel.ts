@@ -71,12 +71,26 @@ export interface LossReasonStat {
   value: number;
 }
 
+/** Fallback success proxy for orgs that don't move deals to won/lost: how many
+ * leads reached the deepest non-empty open stage, and that stage's name. */
+export interface FunnelThroughput {
+  stageName: string;
+  rank: number;
+  reached: number;
+  pct: number; // reached / totalLeads * 100
+}
+
 export interface FunnelReport {
   totalLeads: number;
   wonCount: number;
   lostCount: number;
   openCount: number;
   overallConversion: number;
+  /** Whether this org actually uses the won / lost system statuses (per period).
+   * When false, the dashboard shows throughput instead of a misleading 0%. */
+  usesWon: boolean;
+  usesLost: boolean;
+  throughput: FunnelThroughput | null;
   wonValue: number;
   lostValue: number;
   atRiskValue: number;
@@ -89,6 +103,66 @@ export interface FunnelReport {
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+// An org "uses" won/lost only when a meaningful share of leads actually reach
+// that status. Many companies close deals on an intermediate stage and leave
+// won/lost empty — for them won-based conversion is a false 0%. Two conditions
+// (absolute floor AND share) avoid flipping on a noisy short period.
+const CLOSED_MIN_COUNT = 3;
+const CLOSED_MIN_SHARE = 0.05; // 5%
+
+// Throughput target = the deepest *significant* open stage. "Significant" means
+// reaching it actually filtered out part of the previous cohort. A spare/parking
+// tail stage (e.g. a reserve funnel) that leads merely flow into — its reached
+// count barely drops from the previous stage — is skipped, so the metric lands
+// on a real progression stage, not a dead-end. No stage names are hard-coded.
+const THROUGHPUT_MIN_REACHED = 3; // ignore noise tails reached by 1–2 leads
+const THROUGHPUT_PASSTHROUGH_MAX = 0.9; // >90% carryover from prev = not a real milestone
+
+/** Pick the deepest stage that represents real funnel progression. `funnel` must
+ * be sorted by rank ascending; `reached` is cumulative (non-increasing). */
+function pickThroughputStage(funnel: StageMetric[]): StageMetric | null {
+  for (let i = funnel.length - 1; i >= 0; i--) {
+    const s = funnel[i];
+    if (s.reached < THROUGHPUT_MIN_REACHED) continue; // noise tail
+    const prev = i > 0 ? funnel[i - 1] : null;
+    // Skip a "spare"/duplicate tail that the previous cohort just flows into.
+    if (prev && prev.reached > 0 && s.reached / prev.reached > THROUGHPUT_PASSTHROUGH_MAX) continue;
+    return s;
+  }
+  // Fallback: deepest non-empty stage.
+  let deepest: StageMetric | null = null;
+  for (const s of funnel) if (s.reached > 0) deepest = s;
+  return deepest;
+}
+
+/** Derive whether won/lost are really used, plus the throughput fallback
+ * (deepest *significant* open stage). Shared by both report builders. `funnel`
+ * must be sorted by rank ascending. */
+function deriveOutcomeModes(
+  funnel: StageMetric[],
+  totalLeads: number,
+  wonCount: number,
+  lostCount: number,
+): { usesWon: boolean; usesLost: boolean; throughput: FunnelThroughput | null } {
+  const usesWon =
+    totalLeads > 0 && wonCount >= CLOSED_MIN_COUNT && wonCount / totalLeads >= CLOSED_MIN_SHARE;
+  const usesLost =
+    totalLeads > 0 && lostCount >= CLOSED_MIN_COUNT && lostCount / totalLeads >= CLOSED_MIN_SHARE;
+
+  const stage = pickThroughputStage(funnel);
+  const throughput: FunnelThroughput | null =
+    stage && totalLeads > 0
+      ? {
+          stageName: stage.name,
+          rank: stage.rank,
+          reached: stage.reached,
+          pct: round1((stage.reached / totalLeads) * 100),
+        }
+      : null;
+
+  return { usesWon, usesLost, throughput };
 }
 
 export function computeReport(
@@ -192,6 +266,7 @@ export function computeReport(
     .reduce((a, l) => a + l.price, 0);
   const overallConversion =
     totalLeads > 0 ? round1((wonLeads.length / totalLeads) * 100) : 0;
+  const modes = deriveOutcomeModes(funnel, totalLeads, wonLeads.length, lostLeads.length);
 
   return {
     totalLeads,
@@ -199,6 +274,9 @@ export function computeReport(
     lostCount: lostLeads.length,
     openCount: openLeads.length,
     overallConversion,
+    usesWon: modes.usesWon,
+    usesLost: modes.usesLost,
+    throughput: modes.throughput,
     wonValue,
     lostValue,
     atRiskValue,
@@ -296,6 +374,12 @@ export function assembleReport(
 
   const overallConversion =
     headline.totalLeads > 0 ? round1((headline.wonCount / headline.totalLeads) * 100) : 0;
+  const modes = deriveOutcomeModes(
+    funnel,
+    headline.totalLeads,
+    headline.wonCount,
+    headline.lostCount,
+  );
 
   return {
     totalLeads: headline.totalLeads,
@@ -303,6 +387,9 @@ export function assembleReport(
     lostCount: headline.lostCount,
     openCount: headline.openCount,
     overallConversion,
+    usesWon: modes.usesWon,
+    usesLost: modes.usesLost,
+    throughput: modes.throughput,
     wonValue: headline.wonValue,
     lostValue: headline.lostValue,
     atRiskValue: headline.atRiskValue,

@@ -163,21 +163,58 @@ async function DashboardData({
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Лидов за период" value={formatNumber(r.totalLeads)} placeholder={!hasData} />
-        <StatCard label="Конверсия в продажу" value={`${r.overallConversion}%`} accent="xray" placeholder={!hasData} />
-        <StatCard
-          label="Выиграно сделок"
-          value={formatNumber(r.wonCount)}
-          hint={hasData ? fmtMoney(r.wonValue) : undefined}
-          accent="good"
-          placeholder={!hasData}
-        />
-        <StatCard
-          label="Упущенная сумма"
-          value={fmtMoney(r.lostValue)}
-          hint={hasData ? `${formatNumber(r.lostCount)} потеряно` : undefined}
-          accent="bad"
-          placeholder={!hasData}
-        />
+
+        {/* Conversion: won-based only when the org actually uses won, otherwise
+            funnel throughput to the deepest reached stage (no false 0%). */}
+        {r.usesWon ? (
+          <StatCard label="Конверсия в продажу" value={`${r.overallConversion}%`} accent="xray" placeholder={!hasData} />
+        ) : (
+          <StatCard
+            label="Доходимость воронки"
+            value={`${r.throughput?.pct ?? 0}%`}
+            hint={hasData && r.throughput ? `дошли до «${r.throughput.stageName}»` : undefined}
+            accent="xray"
+            placeholder={!hasData}
+          />
+        )}
+
+        {/* Won deals, or — for orgs that don't use won — how many reached the
+            deepest stage of the funnel. */}
+        {r.usesWon ? (
+          <StatCard
+            label="Выиграно сделок"
+            value={formatNumber(r.wonCount)}
+            hint={hasData ? fmtMoney(r.wonValue) : undefined}
+            accent="good"
+            placeholder={!hasData}
+          />
+        ) : (
+          <StatCard
+            label="Дошли до финала"
+            value={formatNumber(r.throughput?.reached ?? 0)}
+            hint={hasData && r.throughput ? `этап «${r.throughput.stageName}»` : undefined}
+            accent="good"
+            placeholder={!hasData}
+          />
+        )}
+
+        {/* Lost money, or — without lost usage — deals currently in progress. */}
+        {r.usesLost ? (
+          <StatCard
+            label="Упущенная сумма"
+            value={fmtMoney(r.lostValue)}
+            hint={hasData ? `${formatNumber(r.lostCount)} потеряно` : undefined}
+            accent="bad"
+            placeholder={!hasData}
+          />
+        ) : (
+          <StatCard
+            label="Сейчас в работе"
+            value={formatNumber(r.openCount)}
+            hint={hasData ? "открытых сделок" : undefined}
+            placeholder={!hasData}
+          />
+        )}
       </div>
 
       {hasData && r.keyMetrics.some((m) => m.available) && (
