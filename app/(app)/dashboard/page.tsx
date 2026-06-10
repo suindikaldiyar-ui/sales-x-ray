@@ -11,6 +11,7 @@ import {
 import { requireTenant, canManageIntegrations } from "@/lib/tenant";
 import { createClient } from "@/lib/supabase/server";
 import { getReportShell, getReportData } from "@/lib/analytics/report";
+import { getTasksData } from "@/lib/analytics/tasks";
 import { fmtMoney } from "@/lib/analytics/funnel";
 import { formatNumber, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/app/page-header";
@@ -142,12 +143,15 @@ async function DashboardData({
   pipelineId: number | null;
 }) {
   const supabase = createClient();
-  const data = await getReportData(supabase, orgId, {
-    period,
-    from,
-    to,
-    pipelineId: pipelineId != null ? String(pipelineId) : undefined,
-  });
+  const [data, tasks] = await Promise.all([
+    getReportData(supabase, orgId, {
+      period,
+      from,
+      to,
+      pipelineId: pipelineId != null ? String(pipelineId) : undefined,
+    }),
+    getTasksData(supabase, orgId),
+  ]);
   const r = data.report!;
   const hasData = data.hasData;
   const firstReached = r.funnel[0]?.reached ?? 0;
@@ -320,6 +324,28 @@ async function DashboardData({
           )}
         </Card>
       </div>
+
+      {tasks.connected && (
+        <div className="mt-6">
+          <Card>
+            <CardHeader title="Задачи" subtitle="Открытые задачи amoCRM — снимок на текущий момент" />
+            <div className="grid gap-4 sm:grid-cols-3">
+              <StatCard
+                label="Просроченные задачи"
+                value={formatNumber(tasks.overdue)}
+                accent={tasks.overdue > 0 ? "bad" : "good"}
+              />
+              <StatCard label="Задачи на сегодня" value={formatNumber(tasks.dueToday)} accent="xray" />
+              <StatCard
+                label="Сделки без задач"
+                value={formatNumber(tasks.leadsWithoutTasks)}
+                hint="открытые сделки без единой задачи"
+                accent={tasks.leadsWithoutTasks > 0 ? "bad" : "good"}
+              />
+            </div>
+          </Card>
+        </div>
+      )}
 
       {data.managers.length > 0 && (
         <div className="mt-6">

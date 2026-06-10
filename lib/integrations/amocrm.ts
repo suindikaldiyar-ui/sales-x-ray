@@ -94,6 +94,14 @@ interface AmoContactRaw {
     values?: { value?: string }[];
   }[];
 }
+interface AmoTaskRaw {
+  id: number;
+  entity_id?: number;
+  entity_type?: string;
+  responsible_user_id?: number;
+  complete_till?: number;
+  is_completed?: boolean;
+}
 
 // ── normalized shapes returned to the sync layer ──────────────────────────
 export interface AmoStage {
@@ -121,6 +129,14 @@ export interface AmoContact {
   id: number;
   responsibleUserId: number | null;
   phones: string[];
+}
+/** An open (incomplete) task tied to a lead. */
+export interface AmoTask {
+  id: number;
+  leadId: number | null; // entity_id when entity_type = 'leads'
+  responsibleUserId: number | null;
+  completeTill: number | null; // unix seconds (due time)
+  isCompleted: boolean;
 }
 export interface AmoLead {
   id: number;
@@ -272,6 +288,31 @@ export class AmoApiClient {
         .filter(Boolean),
     }));
     return { contacts, isLast: arr.length < 250 };
+  }
+
+  /**
+   * One page of OPEN (incomplete) tasks tied to leads. `isLast` is true when the
+   * page came back short. Used to refresh the per-org open-task snapshot. The
+   * date/entity filters keep the payload to actionable lead tasks only.
+   */
+  async getTasksPage(page: number): Promise<{ tasks: AmoTask[]; isLast: boolean }> {
+    const qs = new URLSearchParams();
+    qs.set("filter[is_completed]", "0");
+    qs.set("filter[entity_type]", "leads");
+    qs.set("limit", "250");
+    qs.set("page", String(page));
+    const data = await this.request<{ _embedded?: { tasks?: AmoTaskRaw[] } }>(
+      `/api/v4/tasks?${qs.toString()}`,
+    );
+    const arr = data._embedded?.tasks ?? [];
+    const tasks: AmoTask[] = arr.map((t) => ({
+      id: t.id,
+      leadId: t.entity_type === "leads" ? (t.entity_id ?? null) : (t.entity_id ?? null),
+      responsibleUserId: t.responsible_user_id ?? null,
+      completeTill: t.complete_till ?? null,
+      isCompleted: Boolean(t.is_completed),
+    }));
+    return { tasks, isLast: arr.length < 250 };
   }
 
   /** Full amoCRM user directory (managers), paged. */

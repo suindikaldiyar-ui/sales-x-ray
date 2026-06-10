@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCallsData, fmtDuration } from "@/lib/analytics/calls";
 import { getConversationsData } from "@/lib/analytics/conversations";
+import { getTasksData } from "@/lib/analytics/tasks";
 import { fmtDate, fmtTime } from "@/lib/datetime";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -170,13 +171,14 @@ export async function sendTelegramReport(
       .maybeSingle();
     const orgName = (orgRow?.name as string) || "Организация";
 
-    const [calls, conv, stuckNew] = await Promise.all([
+    const [calls, conv, stuckNew, tasks] = await Promise.all([
       getCallsData(supabase, org, { period: "today" }),
       getConversationsData(supabase, org, { period: "today" }),
       getStuckNewLeads(supabase, org),
+      getTasksData(supabase, org),
     ]);
 
-    const text = buildMessage(orgName, calls, conv, stuckNew);
+    const text = buildMessage(orgName, calls, conv, stuckNew, tasks);
 
     const res = await fetch(`https://api.telegram.org/bot${tg.token}/sendMessage`, {
       method: "POST",
@@ -209,6 +211,7 @@ function buildMessage(
   calls: Awaited<ReturnType<typeof getCallsData>>,
   conv: Awaited<ReturnType<typeof getConversationsData>>,
   stuckNew: StuckNewLeads | null,
+  tasks: Awaited<ReturnType<typeof getTasksData>>,
 ): string {
   const L: string[] = [];
   L.push(`📊 <b>Sales X-Ray — отчёт за день</b>`);
@@ -238,6 +241,11 @@ function buildMessage(
     } else {
       L.push(`✅ Новые лиды: все в работе`);
     }
+  }
+  if (tasks.connected) {
+    L.push(`⚠️ Просроченные задачи: <b>${tasks.overdue}</b>`);
+    L.push(`🗓 Задачи на сегодня: <b>${tasks.dueToday}</b>`);
+    L.push(`⚠️ Сделки без задач: <b>${tasks.leadsWithoutTasks}</b>`);
   }
   L.push(`📉 Итого упущенных обращений: <b>${lostContacts}</b>`);
 

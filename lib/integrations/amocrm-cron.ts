@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAmoApiClient, type AmoCrmConfig, type AmoLead } from "./amocrm";
 import { upsertContactPhones } from "./amocrm-phones";
+import { syncOpenTasks } from "./amocrm-tasks";
 
 // Incremental top-up tuning (cron runs are short — Hobby caps ~10s).
 const MAX_PAGES_PER_PIPELINE = 4; // ≈1000 changed leads / pipeline / run
@@ -180,6 +181,16 @@ export async function runIncrementalSync(
     if (isLast) break;
   }
 
+  // ── open-task snapshot (uses leftover time within this org's deadline) ────
+  // Cheap when out of time: it just fetches 0 pages and keeps the old snapshot.
+  let taskCount = 0;
+  try {
+    const t = await syncOpenTasks(supabase, org, client, { deadline });
+    taskCount = t.synced;
+  } catch (err) {
+    console.warn(`[cron sync] org=${org} tasks failed:`, err instanceof Error ? err.message : err);
+  }
+
   const nowIso = new Date().toISOString();
   await supabase
     .from("integrations")
@@ -188,7 +199,8 @@ export async function runIncrementalSync(
     .eq("provider", "amocrm");
 
   console.log(
-    `[cron sync] org=${org}: воронок=${pipelines.length}, обновлено сделок=${leadCount}, телефонов=${phoneCount}`,
+    `[cron sync] org=${org}: воронок=${pipelines.length}, обновлено сделок=${leadCount}, ` +
+      `телефонов=${phoneCount}, задач=${taskCount}`,
   );
   return { organizationId: org, leads: leadCount, pipelines: pipelines.length };
 }

@@ -8,6 +8,7 @@ import {
   type AmoLead,
 } from "./amocrm";
 import { upsertContactPhones } from "./amocrm-phones";
+import { syncOpenTasks } from "./amocrm-tasks";
 
 // ── window config ──────────────────────────────────────────────────────────
 /** Default sync window (days). Override with SYNC_WINDOW_DAYS; full = 365. */
@@ -28,7 +29,7 @@ export class SyncConfigError extends Error {}
 
 export interface SyncProgress {
   status: "running" | "done" | "error";
-  phase: "pipelines" | "leads" | "events" | "contacts" | "done";
+  phase: "pipelines" | "leads" | "events" | "contacts" | "tasks" | "done";
   done: boolean;
   progress: number; // 0..1 (soft estimate)
   leadsSynced: number;
@@ -456,15 +457,42 @@ async function processContactsBatch(
 
     pagesDone += pages.length;
     const hitLast = results.some((r) => r.isLast);
-    if (hitLast) state.phase = "done";
+    if (hitLast) state.phase = "tasks";
     else state.cursor_page += pages.length;
 
     await saveState(supabase, org, { phase: state.phase, cursor_page: state.cursor_page });
     console.log(
       `[sync amocrm] phase=contacts page=${state.cursor_page} deadline-hit=false`,
     );
-    if (state.phase === "done") break;
+    if (state.phase === "tasks") break;
   }
+}
+
+/**
+ * Tasks phase — refresh the open-task snapshot for the org. syncOpenTasks only
+ * replaces the snapshot once the FULL set is fetched, so if this request runs
+ * out of time it simply stays in the `tasks` phase and the next request retries
+ * from page 1 (idempotent). Normal volumes complete within one 22s request.
+ */
+async function processTasksBatch(
+  supabase: SupabaseClient,
+  org: string,
+  client: AmoApiClient,
+  state: SyncStateRow,
+  deadline: number,
+): Promise<void> {
+  // Tasks are best-effort: never let a missing table / amoCRM hiccup wedge the
+  // sync. We always advance to "done" — syncOpenTasks only writes when it has the
+  // full set, so a partial/failed run just leaves the previous snapshot for the
+  // nightly cron (or the next manual sync) to refresh.
+  try {
+    const res = await syncOpenTasks(supabase, org, client, { deadline });
+    console.log(`[sync amocrm] phase=tasks complete=${res.complete} tasks=${res.synced}`);
+  } catch (err) {
+    console.warn("[sync amocrm] tasks failed (skipped):", err instanceof Error ? err.message : err);
+  }
+  state.phase = "done";
+  await saveState(supabase, org, { phase: state.phase });
 }
 
 /** One-time diagnostic dump after a sync finishes — verifies what landed. */
@@ -537,6 +565,7 @@ function computeProgress(state: SyncStateRow): number {
   if (state.phase === "events")
     return 0.5 + 0.35 * (state.events_processed / (state.events_processed + 15000));
   if (state.phase === "contacts") return 0.9;
+  if (state.phase === "tasks") return 0.96;
   return 0.04;
 }
 
@@ -609,6 +638,9 @@ export async function runSyncBatch(
   }
   if (state.phase === "contacts") {
     await processContactsBatch(supabase, org, client, state, deadline);
+  }
+  if (state.phase === "tasks") {
+    await processTasksBatch(supabase, org, client, state, deadline);
   }
 
   const finished = state.phase === "done";
