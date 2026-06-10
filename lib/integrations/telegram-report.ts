@@ -68,6 +68,85 @@ function esc(s: string | null | undefined): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// A lead still sitting on the FIRST funnel stage this long is "unprocessed".
+const NEW_LEAD_STALE_HOURS = 24;
+
+interface StuckNewLeads {
+  count: number;
+  stageName: string;
+}
+
+/**
+ * Count leads stuck on the FIRST stage of the org's funnel for longer than a
+ * day — i.e. new leads a manager hasn't moved forward. The first stage is taken
+ * dynamically as min(rank) (never hard-coded), in the org's default pipeline
+ * (main → largest → first), matching how the dashboard picks a funnel.
+ *
+ * Time-on-stage uses `created_at_src`: a lead is created on the entry stage, so
+ * its creation time IS its first-stage entry time (the schema's `stage_entered_at`
+ * actually holds `updated_at`, which a field edit would reset, so it's unsuitable).
+ * Every query is scoped to `org`. Returns null if the org has no amoCRM funnel.
+ */
+async function getStuckNewLeads(
+  supabase: SupabaseClient,
+  org: string,
+): Promise<StuckNewLeads | null> {
+  const { data: pls } = await supabase
+    .from("amocrm_pipelines")
+    .select("external_id, is_main")
+    .eq("organization_id", org);
+  const pipelines = (pls as { external_id: number; is_main: boolean }[]) ?? [];
+  if (pipelines.length === 0) return null;
+
+  // Default pipeline: main → largest by lead count → first.
+  let pipelineId = pipelines.find((p) => p.is_main)?.external_id;
+  if (pipelineId == null) {
+    if (pipelines.length === 1) {
+      pipelineId = pipelines[0].external_id;
+    } else {
+      let best = pipelines[0].external_id;
+      let bestCount = -1;
+      for (const p of pipelines) {
+        const { count } = await supabase
+          .from("leads")
+          .select("*", { count: "exact", head: true })
+          .eq("organization_id", org)
+          .eq("source", "amocrm")
+          .eq("pipeline_external_id", p.external_id);
+        if ((count ?? 0) > bestCount) {
+          bestCount = count ?? 0;
+          best = p.external_id;
+        }
+      }
+      pipelineId = best;
+    }
+  }
+
+  // First open stage = lowest positional rank.
+  const { data: stage } = await supabase
+    .from("amocrm_stages")
+    .select("name, external_id, rank")
+    .eq("organization_id", org)
+    .eq("pipeline_external_id", pipelineId)
+    .not("rank", "is", null)
+    .order("rank", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!stage) return null;
+
+  const cutoff = new Date(Date.now() - NEW_LEAD_STALE_HOURS * 3600 * 1000).toISOString();
+  const { count } = await supabase
+    .from("leads")
+    .select("*", { count: "exact", head: true })
+    .eq("organization_id", org)
+    .eq("source", "amocrm")
+    .eq("pipeline_external_id", pipelineId)
+    .eq("status_external_id", (stage as { external_id: number }).external_id)
+    .lt("created_at_src", cutoff);
+
+  return { count: count ?? 0, stageName: (stage as { name: string }).name };
+}
+
 /**
  * Build the daily report (period = today, Asia/Almaty) from existing analytics
  * and send it to Telegram (HTML). Never throws — returns a result the cron logs.
@@ -91,12 +170,13 @@ export async function sendTelegramReport(
       .maybeSingle();
     const orgName = (orgRow?.name as string) || "Организация";
 
-    const [calls, conv] = await Promise.all([
+    const [calls, conv, stuckNew] = await Promise.all([
       getCallsData(supabase, org, { period: "today" }),
       getConversationsData(supabase, org, { period: "today" }),
+      getStuckNewLeads(supabase, org),
     ]);
 
-    const text = buildMessage(orgName, calls, conv);
+    const text = buildMessage(orgName, calls, conv, stuckNew);
 
     const res = await fetch(`https://api.telegram.org/bot${tg.token}/sendMessage`, {
       method: "POST",
@@ -128,6 +208,7 @@ function buildMessage(
   orgName: string,
   calls: Awaited<ReturnType<typeof getCallsData>>,
   conv: Awaited<ReturnType<typeof getConversationsData>>,
+  stuckNew: StuckNewLeads | null,
 ): string {
   const L: string[] = [];
   L.push(`📊 <b>Sales X-Ray — отчёт за день</b>`);
@@ -147,6 +228,15 @@ function buildMessage(
     if (conv.avgFirstResponseMin != null) {
       const slow = conv.avgFirstResponseMin >= 15;
       L.push(`${slow ? "🐢" : "⚡️"} Медиана первого ответа: <b>${conv.avgFirstResponseMin} мин</b>`);
+    }
+  }
+  if (stuckNew) {
+    if (stuckNew.count > 0) {
+      L.push(
+        `⚠️ Необработанные лиды: <b>${stuckNew.count}</b> застряли на «${esc(stuckNew.stageName)}» дольше суток`,
+      );
+    } else {
+      L.push(`✅ Новые лиды: все в работе`);
     }
   }
   L.push(`📉 Итого упущенных обращений: <b>${lostContacts}</b>`);
