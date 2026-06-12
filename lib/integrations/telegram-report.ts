@@ -6,6 +6,13 @@ import { getTasksData } from "@/lib/analytics/tasks";
 import { fmtDate, fmtTime } from "@/lib/datetime";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+/** Keep the Telegram AI block short and well under the 4096-char message limit. */
+const AI_SUMMARY_MAX_CHARS = 650;
+/** Don't surface an AI report older than this (days) — avoids stale summaries.
+ * The report is generated on /reports (cached in daily_reports); Telegram only
+ * reuses that READY summary — it never runs Gemini itself. */
+const AI_REPORT_MAX_AGE_DAYS = 14;
+
 export interface TelegramReportResult {
   sent: boolean;
   reason?: string;
@@ -180,30 +187,123 @@ export async function sendTelegramReport(
 
     const text = buildMessage(orgName, calls, conv, stuckNew, tasks);
 
-    const res = await fetch(`https://api.telegram.org/bot${tg.token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: tg.chatId,
-        text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-      }),
-      cache: "no-store",
-    });
-
+    const res = await postTelegram(tg, text);
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.error(`[telegram report] org=${org} -> ${res.status} ${body.slice(0, 300)}`);
-      return { sent: false, error: `Telegram ${res.status}: ${body.slice(0, 160)}` };
+      console.error(`[telegram report] org=${org} -> ${res.status} ${res.body.slice(0, 300)}`);
+      return { sent: false, error: `Telegram ${res.status}: ${res.body.slice(0, 160)}` };
     }
     console.log(`[telegram report] org=${org} отправлен ✓`);
+
+    // AI summary as a SEPARATE second message — never blocks or truncates the
+    // base report. Best-effort: reuses today's cached report, skips on any error.
+    await sendAiSummary(supabase, org, tg);
+
     return { sent: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[telegram report] org=${org} error:`, message);
     return { sent: false, error: message };
   }
+}
+
+/** POST one HTML message to Telegram. Never throws — returns the outcome. */
+async function postTelegram(
+  tg: TelegramConfig,
+  text: string,
+): Promise<{ ok: boolean; status: number; body: string }> {
+  const res = await fetch(`https://api.telegram.org/bot${tg.token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: tg.chatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    }),
+    cache: "no-store",
+  });
+  const body = res.ok ? "" : await res.text().catch(() => "");
+  return { ok: res.ok, status: res.status, body };
+}
+
+/**
+ * Send the short summary of the most recent CACHED AI sales report as a second
+ * Telegram message with a link to the full report. Read-only: it reuses the
+ * report generated on /reports (stored in daily_reports) and NEVER runs Gemini —
+ * the cron client is the service role, under which the membership-guarded report
+ * RPCs (and thus on-the-fly generation) are forbidden anyway. Best-effort: no
+ * recent report, an empty summary, or any error just skips the AI block.
+ */
+async function sendAiSummary(
+  supabase: SupabaseClient,
+  org: string,
+  tg: TelegramConfig,
+): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from("daily_reports")
+      .select("title, content, created_at")
+      .eq("organization_id", org)
+      .eq("kind", "ai_sales")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const content = (data?.content as string | undefined) ?? "";
+    const createdAt = data?.created_at as string | undefined;
+    if (!content || !createdAt) return; // no report generated yet → skip block
+
+    const ageDays = (Date.now() - new Date(createdAt).getTime()) / 86400000;
+    if (ageDays > AI_REPORT_MAX_AGE_DAYS) return; // too stale → skip
+
+    const summary = extractAiSummary(content);
+    if (!summary) return;
+
+    const base = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "");
+    const link = base ? `\n\n📊 <a href="${base}/reports">Полный AI-отчёт</a>` : "";
+    const text =
+      `🤖 <b>AI-анализ продаж</b>\n<i>по отчёту от ${esc(fmtDate(new Date(createdAt)))}</i>\n\n` +
+      `${esc(summary)}${link}`;
+
+    const res = await postTelegram(tg, text);
+    if (!res.ok) {
+      console.error(`[telegram report] org=${org} AI -> ${res.status} ${res.body.slice(0, 200)}`);
+    } else {
+      console.log(`[telegram report] org=${org} AI-резюме отправлено ✓`);
+    }
+  } catch (err) {
+    console.warn(
+      `[telegram report] org=${org} AI-резюме пропущено:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Pull the "Краткое резюме" section out of the markdown report and flatten it to
+ * plain text (strip markdown markers), capped to a Telegram-friendly length.
+ * Falls back to the first paragraph if the heading isn't present.
+ */
+function extractAiSummary(content: string): string {
+  if (!content) return "";
+  // Section between "## Краткое резюме" and the next "## " heading.
+  const m = content.match(/##\s*Краткое резюме\s*\n([\s\S]*?)(?:\n##\s|$)/i);
+  let body = (m ? m[1] : content).trim();
+
+  // Flatten light markdown to plain text (Telegram block is HTML-escaped later).
+  body = body
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/[*_`#>]/g, "")
+    .replace(/^\s*[-•]\s+/gm, "• ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (body.length > AI_SUMMARY_MAX_CHARS) {
+    const cut = body.slice(0, AI_SUMMARY_MAX_CHARS);
+    const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("\n"));
+    body = (lastStop > 200 ? cut.slice(0, lastStop + 1) : cut).trim() + "…";
+  }
+  return body;
 }
 
 function buildMessage(
